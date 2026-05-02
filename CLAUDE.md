@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `resource-monitor` is a Rust TUI system monitor (htop-style) for **macOS + Linux**. It is being built in deliberate phases — see `/Users/han/.claude/plans/rust-htop-cpu-memory-disk-frolicking-meadow.md` for the full design plan and `TODO.md` in this repo for the active roadmap.
 
-**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout) · Phase 2.5/3 carryovers (battery status + time-remaining, Linux connection counts, GPU stale-data check, `setpgid` process-group containment for powermetrics).
+**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout) · Phase 2.5/3 carryovers (battery status + time-remaining, Linux connection counts, GPU stale-data check, `setpgid` process-group containment for powermetrics) · Phase 4 (Container panel via `docker stats` subprocess in a dedicated poller thread, eight-panel layout).
 
-**Next** (live in `TODO.md`): macOS thermal/fan via IOReport (would also unlock the no-sudo GPU path), Phase 4 (Container awareness via Docker socket + cgroups), or Phase 5 (alert rules).
+**Next** (live in `TODO.md`): Phase 4.5 (cgroup PID grouping on Linux, Process panel flat/grouped toggle, optional bollard upgrade), macOS thermal/fan via IOReport, or Phase 5 (alert rules).
 
 Differentiators planned beyond htop: historical sparkline charts, modern theme, container/cgroup awareness, alert rules, and a Prometheus `/metrics` exporter. Explicit non-goals: Windows, GUI/Web UI, multi-machine view, record/replay.
 
@@ -65,7 +65,8 @@ Exit code 0 + alt-screen entry/exit (`?1049h` / `?1049l`) in the log means termi
 1. **Sampler thread** (`app::sampler_loop`) — runs every `config.sample_interval_ms` (default 1000ms). Calls `SystemSource::refresh` once, then walks the `Registry` calling `Collector::sample(&mut CollectCtx)` on each, then `State::commit(snapshot)`.
 2. **UI thread** (main, `App::event_loop`) — every `config.ui_tick_ms` (default 100ms): non-blocking `crossterm::event::poll`, `terminal.draw(|f| ui::render(f, &state, &mut ui_state, &theme))`. Reads via `state.with_view(|view| ...)`.
 3. **GPU reader thread** (`gpu-reader`, only when `--gpu` on macOS) — owned by `GpuCollector`, parses powermetrics stdout into a `Mutex<GpuStats>`. Killed via `setpgid`-rooted SIGKILL on Drop.
-4. **Exporter thread** (planned, Phase 6) — tokio + axum serving `/metrics`, reading the same `SharedState`.
+4. **Container poller thread** (`container-poller`) — owned by `ContainerCollector`, runs `docker stats --no-stream --format json` every 2 s into a `Mutex<PollerState>`. Sampler reads cached results so the ~150 ms docker call doesn't bottleneck the 1 Hz tick. Drop signals shutdown + joins.
+5. **Exporter thread** (planned, Phase 6) — tokio + axum serving `/metrics`, reading the same `SharedState`.
 
 All threads share one `Arc<State>` (alias `SharedState`); state is guarded by an internal `RwLock`. Sampler is the sole writer; UI and (future) exporter are readers.
 

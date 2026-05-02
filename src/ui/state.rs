@@ -9,6 +9,7 @@ pub enum Panel {
     Network,
     Sensors,
     Disk,
+    Container,
     Process,
 }
 
@@ -21,7 +22,8 @@ impl Panel {
             Panel::Gpu => Panel::Network,
             Panel::Network => Panel::Sensors,
             Panel::Sensors => Panel::Disk,
-            Panel::Disk => Panel::Process,
+            Panel::Disk => Panel::Container,
+            Panel::Container => Panel::Process,
             Panel::Process => Panel::Cpu,
         };
         if !gpu_enabled && raw == Panel::Gpu {

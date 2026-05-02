@@ -53,6 +53,8 @@ pub fn render(frame: &mut Frame<'_>, state: &SharedState, ui: &mut UiState, them
     };
     let mid = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(chunks[2]);
+    let disk_row = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(chunks[3]);
 
     state.with_view(|view| {
         widgets::cpu::render(frame, top[0], &view, theme, ui.focus == Panel::Cpu);
@@ -62,7 +64,14 @@ pub fn render(frame: &mut Frame<'_>, state: &SharedState, ui: &mut UiState, them
         }
         widgets::network::render(frame, mid[0], &view, theme, ui.focus == Panel::Network);
         widgets::sensors::render(frame, mid[1], &view, theme, ui.focus == Panel::Sensors);
-        widgets::disk::render(frame, chunks[3], &view, theme, ui.focus == Panel::Disk);
+        widgets::disk::render(frame, disk_row[0], &view, theme, ui.focus == Panel::Disk);
+        widgets::container::render(
+            frame,
+            disk_row[1],
+            &view,
+            theme,
+            ui.focus == Panel::Container,
+        );
         widgets::process::render(
             frame,
             chunks[4],

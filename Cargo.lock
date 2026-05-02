@@ -1273,6 +1273,7 @@ dependencies = [
  "libc",
  "ratatui",
  "serde",
+ "serde_json",
  "sysinfo",
  "toml",
  "tracing",

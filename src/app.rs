@@ -15,8 +15,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::collector::{
-    CpuCollector, DiskCollector, MemoryCollector, NetworkCollector, ProcessCollector, Registry,
-    SensorsCollector, SystemSource,
+    ContainerCollector, CpuCollector, DiskCollector, MemoryCollector, NetworkCollector,
+    ProcessCollector, Registry, SensorsCollector, SystemSource,
 };
 use crate::config::Config;
 use crate::state::{SharedState, Snapshot};
@@ -245,6 +245,7 @@ fn sampler_loop(state: SharedState, config: Config, gpu_enabled: bool, shutdown:
     registry.register(Box::new(DiskCollector::new()));
     registry.register(Box::new(NetworkCollector::new()));
     registry.register(Box::new(SensorsCollector::new()));
+    registry.register(Box::new(ContainerCollector::new()));
     registry.register(Box::new(ProcessCollector::new()));
 
     #[cfg(target_os = "macos")]

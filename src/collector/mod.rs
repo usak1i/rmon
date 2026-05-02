@@ -1,4 +1,5 @@
 mod connections;
+mod container;
 mod cpu;
 mod disk;
 #[cfg(target_os = "macos")]
@@ -10,6 +11,7 @@ mod process;
 mod sensors;
 pub mod system;
 
+pub use container::ContainerCollector;
 pub use cpu::CpuCollector;
 pub use disk::DiskCollector;
 #[cfg(target_os = "macos")]

@@ -3,8 +3,8 @@ mod snapshot;
 
 pub use history::History;
 pub use snapshot::{
-    BatteryReading, BatteryStatus, DiskSnapshot, NetworkSnapshot, ProcessSnapshot, SensorReading,
-    Snapshot,
+    BatteryReading, BatteryStatus, ContainerSnapshot, DiskSnapshot, NetworkSnapshot,
+    ProcessSnapshot, SensorReading, Snapshot,
 };
 
 use std::sync::{Arc, RwLock};

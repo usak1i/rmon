@@ -1,3 +1,4 @@
+pub mod container;
 pub mod cpu;
 pub mod disk;
 pub mod gpu;

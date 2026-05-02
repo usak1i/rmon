@@ -11,6 +11,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - `[x]` Phase 1 — MVP (CPU/Mem/Disk/Process collectors via sysinfo, four-panel TUI with sparklines, dark theme, focus / sort / search / kill / help keys)
 - `[x]` Phase 2 — Network (per-interface RX/TX + total sparkline, loopback hidden) + Sensors (battery on both platforms; Linux hwmon temp/fan; macOS thermal deferred), six-panel layout
 - `[x]` Phase 3 — Apple Silicon GPU via `sudo powermetrics` (opt-in `--gpu` flag, sudo pre-auth before TUI, dedicated reader thread, hand-rolled parser, conditional 7-panel layout)
+- `[x]` Phase 4 v1 — Container panel via `docker stats` subprocess in a dedicated poller thread (2s cache), eight-panel layout (Disk and Container share the disk row)
 
 ---
 
@@ -57,16 +58,28 @@ Path A (sudo + powermetrics) is shipped. Remaining items:
 
 ---
 
-## Phase 4 — Container / Pod awareness
+## Phase 4.5 — Container carryovers
 
-- [ ] Docker: `bollard` over `/var/run/docker.sock`; list containers, fetch stats stream
-  - macOS: Docker Desktop socket
-  - Linux: native daemon
-  - Silently disable the panel if socket is unreachable
-- [ ] Linux cgroup: parse `/proc/<pid>/cgroup`, extract `docker/...` and `kubepods/.../pod<uuid>` IDs; group processes in the Process panel
-- [ ] Container snapshot: id, name, image, status, CPU%, mem, net IO
-- [ ] `widgets/container.rs` — collapsible per-container row showing aggregated children
-- [ ] Toggle key (`C`?) to swap Process panel between flat / grouped-by-container
+Phase 4 v1 ships the docker-CLI poller path. Remaining items from the
+original plan:
+
+- [ ] **Linux cgroup PID grouping**: parse `/proc/<pid>/cgroup`, extract
+  `docker/...` and `kubepods/.../pod<uuid>` IDs. Lets us group processes
+  by container without depending on the docker daemon.
+- [ ] **Process panel grouped/flat toggle** (key `C`?): when grouped,
+  render processes as a forest indented under their container ID;
+  unattributed processes go in a `system` bucket at the top.
+- [ ] **bollard upgrade**: replace the docker CLI subprocess with a real
+  Docker API client. Cleaner streaming model, faster, types instead of
+  string parsing. Cost: pulls in `tokio` for async runtime — defer until
+  Phase 6 (Prometheus exporter) needs tokio anyway, so the marginal
+  cost is zero.
+- [ ] **Image / status / pids columns**: `docker stats` doesn't emit
+  these; either add a parallel `docker ps` call or move to bollard for
+  unified data.
+- [ ] **Container detail keybinding**: `i` → expand selected container
+  with logs tail or env / labels; `K` → `docker stop <id>` with
+  confirmation. Needs the `id` field re-added to `ContainerSnapshot`.
 
 ---
 

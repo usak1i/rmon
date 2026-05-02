@@ -92,6 +92,21 @@ pub struct BatteryReading {
     pub time_remaining_minutes: Option<u32>,
 }
 
+/// Per-container snapshot from `docker stats`. Names map to docker's
+/// `stats --format` keys; we copy them into typed numbers so the widget
+/// doesn't have to re-parse strings each frame. (Container ID is dropped
+/// here — re-add when a feature like "kill container" needs to address
+/// it unambiguously.)
+#[derive(Debug, Clone)]
+pub struct ContainerSnapshot {
+    pub name: String,
+    pub cpu_percent: f64,
+    pub mem_bytes: u64,
+    pub mem_percent: f64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+}
+
 /// One sampling round's worth of data, accumulated by the registry.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -103,6 +118,7 @@ pub struct Snapshot {
     pub networks: Vec<NetworkSnapshot>,
     pub sensors: Vec<SensorReading>,
     pub batteries: Vec<BatteryReading>,
+    pub containers: Vec<ContainerSnapshot>,
 }
 
 impl Snapshot {
@@ -114,6 +130,7 @@ impl Snapshot {
             networks: Vec::new(),
             sensors: Vec::new(),
             batteries: Vec::new(),
+            containers: Vec::new(),
         }
     }
 
