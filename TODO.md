@@ -16,6 +16,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - `[x]` Phase 5 — TOML alert rules (`[[alert]]` blocks with `op` ∈ `> < >= <=`, `duration`, `severity`); evaluator with breach-since tracking, firing transitions tint panel borders + ring the terminal bell + log via tracing, `a` key opens an overlay listing currently-firing + last 50 transitions
 - `[x]` Bollard upgrade — replaced the docker CLI subprocess with bollard 0.20 driven by a current-thread tokio runtime on the `container-poller` thread. Pulls in tokio (`net`/`rt`/`time` only) so Phase 6 Prometheus exporter can reuse it. Pure CPU% formula extracted as testable fn.
 - `[x]` IOReport (B.2 partial) — Apple Silicon CPU / GPU / ANE *power* readings (Watts, no sudo) via the private IOReport framework. `build.rs` adds `/usr/lib` to the linker search path so `libIOReport.dylib` resolves on macOS 26. SensorsCollector holds an optional sampler; `power` category surfaces in the Sensors widget. Thermal sensors and the no-sudo GPU usage path stay as carryovers.
+- `[x]` Phase 6 — Prometheus `/metrics` exporter, opt-in via `--prometheus <addr:port>`. Dedicated thread driving a current-thread tokio runtime + axum; graceful shutdown via `tokio::sync::Notify`. `MetricKey` → Prometheus name with sanitiser (dots/dashes/slashes → underscore, leading-digit / non-ASCII rejected) + `rmon_` prefix. 5 unit tests on the sanitiser.
 
 ---
 
@@ -109,14 +110,25 @@ Phase 5 v1 ships rule definition + evaluator + UI integration. Outstanding:
 
 ---
 
-## Phase 6 — Prometheus exporter
+## Phase 6 — Prometheus exporter (carryovers)
 
-- [ ] `--prometheus <addr:port>` CLI flag (off by default — keep idle CPU low)
-- [ ] Spawn tokio runtime + axum on the configured address only when flag set
-- [ ] `/metrics` endpoint serialises `Snapshot::numeric` as `gauge` lines, plus a stable subset of process / disk fields as labels
-- [ ] Add `tokio` and `axum` as **optional** features (`cargo add tokio --optional`) so non-exporter users don't pay the compile cost
-- [ ] CI: `promtool check metrics` against the live endpoint
-- [ ] Document scrape configuration snippet in README (when a README is requested)
+Phase 6 v1 ships the basic `/metrics` endpoint. Outstanding:
+
+- [ ] **Process / disk labels**: today only `Snapshot::numeric` flows out
+  as gauges. Per-process and per-disk metrics with `pid`/`name`/`mount`
+  labels would let users build per-container dashboards. Watch
+  cardinality — gate behind `--prometheus-include-processes` if added.
+- [ ] **`hostname` label injection**: useful when one Prometheus scrapes
+  multiple boxes. Prometheus already adds `instance`; consider whether
+  duplicating that into a label is worth it.
+- [ ] **`promtool check metrics` in CI**: hit the endpoint from the
+  matrix runners and validate format. Today the smoke test only checks
+  `200` + a recognisable line. promtool would catch label / type drift.
+- [ ] **HELP comments** per metric (currently only `# TYPE`). Optional
+  but Prometheus Operators tend to want them.
+- [ ] **Optional `tokio` + `axum`**: tokio is a hard dep now (bollard
+  needs it), so making axum truly opt-in via cargo features mostly
+  saves compile time, not binary size. Defer until someone asks.
 
 ---
 

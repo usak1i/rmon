@@ -2,9 +2,11 @@ mod alert;
 mod app;
 mod collector;
 mod config;
+mod export;
 mod state;
 mod ui;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -35,6 +37,12 @@ struct Cli {
     /// You'll be prompted to authenticate with sudo before the TUI starts.
     #[arg(long)]
     gpu: bool,
+
+    /// Expose a Prometheus `/metrics` endpoint at the given address.
+    /// Disabled by default to keep idle resource usage low.
+    /// Example: `--prometheus 127.0.0.1:9091`.
+    #[arg(long, value_name = "ADDR:PORT")]
+    prometheus: Option<SocketAddr>,
 }
 
 fn main() -> Result<()> {
@@ -58,8 +66,22 @@ fn main() -> Result<()> {
 
     let state: SharedState = Arc::new(state::State::new(config.history_capacity));
 
+    let exporter = if let Some(addr) = cli.prometheus {
+        match export::Exporter::start(state.clone(), addr) {
+            Ok(e) => Some(e),
+            Err(e) => {
+                eprintln!("Could not start Prometheus exporter on {addr}: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let mut app = App::new(state, config, gpu_enabled, alert_rules);
-    app.run()
+    let result = app.run();
+    drop(exporter); // graceful shutdown of the /metrics server
+    result
 }
 
 fn init_tracing(debug: bool) -> Result<()> {

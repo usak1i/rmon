@@ -14,6 +14,9 @@ Built in numbered phases. Currently shipped:
 | 1 | CPU / Memory / Disk / Process collectors via `sysinfo`, sparklines, dark theme, focus / sort / search / kill / help keys |
 | 2 | Network (per-interface RX/TX) + Sensors (battery on both platforms; Linux hwmon temp/fan) |
 | 3 | Apple Silicon GPU via `sudo powermetrics` (opt-in) |
+| 4 | Container panel (Docker via `bollard`) + Linux cgroup PID grouping (`g` toggle) |
+| 5 | TOML alert rules (`[[alert]]` blocks) — firing tints panel borders, `a` opens an overlay |
+| 6 | Apple Silicon CPU/GPU/ANE power via private IOReport (no sudo) + Prometheus `/metrics` exporter |
 
 Roadmap & deferred items live in [`TODO.md`](TODO.md). High-level architecture
 notes for contributors are in [`CLAUDE.md`](CLAUDE.md).
@@ -44,6 +47,7 @@ cargo run --release                       # default
 cargo run --release -- --gpu              # macOS only: enable GPU panel
 cargo run --release -- --config my.toml   # custom config path
 cargo run --release -- --debug            # verbose tracing on stderr
+cargo run --release -- --prometheus 127.0.0.1:9091   # expose /metrics
 ```
 
 `--help` for the full flag list.
@@ -121,9 +125,39 @@ required.
 
 ### macOS sensors
 
-Phase 2 ships battery percentage only (parsed from `pmset -g batt`).
-Apple Silicon thermals/fans need the private IOReport framework — tracked
-under Phase 2.5 carryovers.
+Phase 2 ships battery (parsed from `pmset -g batt`). Phase 6 added
+Apple Silicon CPU / GPU / ANE *power* readings (Watts) via the private
+IOReport framework — no sudo, no powermetrics dependency. Die
+temperatures and fan RPMs still need work; see `TODO.md`.
+
+## Prometheus exporter
+
+Pass `--prometheus <addr:port>` to expose a `/metrics` endpoint:
+
+```bash
+resource-monitor --prometheus 127.0.0.1:9091
+curl -s http://127.0.0.1:9091/metrics | head
+# # TYPE rmon_cpu_core_0 gauge
+# rmon_cpu_core_0 35.29
+# # TYPE rmon_cpu_total gauge
+# rmon_cpu_total 18.75
+# ...
+```
+
+All numeric series in `Snapshot::numeric` are emitted as gauges.
+`MetricKey` names get sanitised (dots / dashes / slashes →
+underscore) and prefixed with `rmon_`. Off by default to keep idle
+resource use low.
+
+A scrape config snippet for `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: rmon
+    static_configs:
+      - targets: ['127.0.0.1:9091']
+    scrape_interval: 5s
+```
 
 ## Logs
 
