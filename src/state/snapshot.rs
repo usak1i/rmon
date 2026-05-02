@@ -1,0 +1,92 @@
+use std::collections::HashMap;
+
+/// Identifies a single time-series metric. String-based for flexibility
+/// (per-core CPU, per-disk IO, per-interface network throughput all need
+/// dynamic indexing).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct MetricKey(pub String);
+
+impl MetricKey {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
+/// Point-in-time process info captured each tick. Not pushed into history —
+/// the process list is too dynamic for series storage; the table renders the
+/// latest snapshot directly.
+#[derive(Debug, Clone)]
+pub struct ProcessSnapshot {
+    pub pid: u32,
+    pub user: String,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    pub command: String,
+    pub status: char,
+    pub run_time_secs: u64,
+}
+
+/// Point-in-time mount/volume entry. IO throughput per disk is deferred to
+/// Phase 2 (sysinfo doesn't expose system-wide block-device IO).
+#[derive(Debug, Clone)]
+pub struct DiskSnapshot {
+    pub mount_point: String,
+    pub fs_type: String,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+/// Per-interface network reading. `rx_bps` / `tx_bps` are computed by the
+/// network collector using `SystemSource::last_refresh_elapsed`.
+#[derive(Debug, Clone)]
+pub struct NetworkSnapshot {
+    pub interface: String,
+    pub rx_bps: f64,
+    pub tx_bps: f64,
+    pub total_rx_bytes: u64,
+    pub total_tx_bytes: u64,
+}
+
+/// Generic key-value sensor reading. `category` groups readings in the UI
+/// (`temp`, `fan`, `battery`); `name` is the human label; `unit` is appended
+/// for display. Numeric value is also pushed into the `Snapshot::numeric`
+/// map under `sensor.<category>.<name>` so it can drive sparklines later.
+#[derive(Debug, Clone)]
+pub struct SensorReading {
+    pub category: String,
+    pub name: String,
+    pub value: f64,
+    pub unit: &'static str,
+}
+
+/// One sampling round's worth of data, accumulated by the registry.
+#[derive(Debug, Clone, Default)]
+pub struct Snapshot {
+    /// Numeric metrics keyed by name. Convention: `<group>.<sub>` e.g.
+    /// `cpu.total`, `cpu.core.0`, `mem.used_bytes`.
+    pub numeric: HashMap<MetricKey, f64>,
+    pub processes: Vec<ProcessSnapshot>,
+    pub disks: Vec<DiskSnapshot>,
+    pub networks: Vec<NetworkSnapshot>,
+    pub sensors: Vec<SensorReading>,
+}
+
+impl Snapshot {
+    pub fn new() -> Self {
+        Self {
+            numeric: HashMap::new(),
+            processes: Vec::new(),
+            disks: Vec::new(),
+            networks: Vec::new(),
+            sensors: Vec::new(),
+        }
+    }
+
+    pub fn set(&mut self, key: impl Into<String>, value: f64) {
+        self.numeric.insert(MetricKey::new(key), value);
+    }
+
+    pub fn get(&self, key: &str) -> Option<f64> {
+        self.numeric.get(&MetricKey::new(key)).copied()
+    }
+}
