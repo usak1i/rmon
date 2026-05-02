@@ -29,7 +29,7 @@ cargo run --release                    # smoother sampling/UI
 cargo run --release -- --gpu           # macOS only: enable GPU panel (sudo)
 cargo run -- --config <path> --debug   # custom TOML config + RUST_LOG=debug
 
-cargo test                          # 19 tests across history, format, gpu parser, pmset, hwmon, connections
+cargo test                          # 31 tests: history, format, gpu parser, pmset, hwmon, connections, container parser, cgroup parser
 cargo test parses_gpu_power         # run a single test by substring
 cargo test connections::tests       # run all tests in one module
 
@@ -99,6 +99,33 @@ The `Collector::sample` signature takes `&mut CollectCtx<'_> { snapshot, system:
 - **Phase discipline**: keep collectors decoupled from UI. A new metric is added by registering a `Collector` that writes to `Snapshot::set("group.sub", value)` — no UI changes needed for the value to flow into history. UI changes happen only when you want to *render* it. Full pattern in the `add-collector` skill.
 - **Platform-cfg'd parsers stay testable**: when a parser is only called from `#[cfg(target_os = "linux")]` code, gate it with `#[cfg(any(test, target_os = "linux"))]` so its tests still run on the macOS CI runner. See `collector/connections.rs` for the pattern.
 - **No `git add -A`** — stage by name. The repo has no secrets right now but this avoids future accidents (`.env`, large binaries).
+
+## Code review
+
+After every chunk of Rust source changes (`src/**/*.rs` or `Cargo.toml`),
+**invoke the `rust-code-reviewer` subagent** before running the local
+`rust-phase-gate` and pushing. Pass it:
+
+- The list of files just modified (paths)
+- A short summary of the intent of the change (which phase / which carryover)
+- Any context the reviewer would otherwise have to re-derive (e.g. "this
+  is the parser fn called only from cfg(target_os = "linux") code, see
+  the platform-cfg test pattern")
+
+Treat its findings as a peer review:
+
+- Real defects → fix and re-run the gate.
+- Style / lint nits → fix unless they conflict with the project conventions
+  above; bias toward fixing.
+- Missing-test calls → add the test if the function is pure; manual-only
+  if it touches I/O.
+- Speculative refactor suggestions → push back; this codebase prefers
+  YAGNI (see how `parent_pid`, `id`, `captured_at` were dropped and
+  re-added on demand rather than kept "just in case").
+
+The skill `push-and-watch-ci` lists this as part of its pre-flight so
+the review happens before CI minutes are spent. Skip the review only
+for docs-only changes (`*.md`, `TODO.md`, `CLAUDE.md`).
 
 ## Platform-specific work
 

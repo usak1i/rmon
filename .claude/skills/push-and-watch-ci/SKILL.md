@@ -10,9 +10,13 @@ run *in the background* so the agent stays responsive while CI runs.
 
 ## Pre-flight
 
-1. Run `rust-phase-gate` locally first. Pushing red code wastes CI minutes
+1. **Invoke the `rust-code-reviewer` subagent** on the just-changed
+   Rust files (skip for docs-only commits). Treat findings as peer
+   review: fix real defects, push back on speculative refactors. See
+   the "Code review" section in `CLAUDE.md` for what to pass it.
+2. Run `rust-phase-gate` locally. Pushing red code wastes CI minutes
    and pollutes the run history.
-2. Update docs that depend on the work — typically `CLAUDE.md` "Done so
+3. Update docs that depend on the work — typically `CLAUDE.md` "Done so
    far" line and `TODO.md` checkboxes. Stale docs make PR diffs noisy.
 
 ## Commit
