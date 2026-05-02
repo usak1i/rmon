@@ -4,35 +4,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project context
 
-`resource-monitor` is a Rust TUI system monitor (htop-style) for **macOS + Linux**. It is being built in deliberate phases — see `/Users/han/.claude/plans/rust-htop-cpu-memory-disk-frolicking-meadow.md` for the full design plan and phase breakdown, plus `TODO.md` in this repo for the active roadmap.
+`resource-monitor` is a Rust TUI system monitor (htop-style) for **macOS + Linux**. It is being built in deliberate phases — see `/Users/han/.claude/plans/rust-htop-cpu-memory-disk-frolicking-meadow.md` for the full design plan and `TODO.md` in this repo for the active roadmap.
 
-**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout).
+**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout) · Phase 2.5/3 carryovers (battery status + time-remaining, Linux connection counts, GPU stale-data check, `setpgid` process-group containment for powermetrics).
 
-**Next**: Phase 2.5 carryovers (macOS thermal via IOReport, Linux connection counts) or Phase 4 (Container awareness via Docker socket + cgroups).
-
-### Phase 3 GPU specifics
-The GPU collector is **opt-in** (`--gpu`), **macOS-only**, and gated behind sudo. Flow:
-1. `main.rs::ensure_gpu_prereqs` runs `sudo -v` *before* entering raw mode so the password prompt is reachable.
-2. The sampler thread tries `GpuCollector::try_new` which probes `sudo -n true`, then spawns `sudo powermetrics --samplers gpu_power -i 1000` with stdout piped.
-3. A dedicated `gpu-reader` thread parses `GPU HW active residency` / `GPU active frequency` / `GPU Power` lines into a `Mutex<GpuStats>`.
-4. `GpuCollector::sample` snapshots that mutex into `gpu.usage` / `gpu.freq_mhz` / `gpu.power_mw` numerics.
-5. `Drop for GpuCollector` SIGKILLs the powermetrics child; the reader thread exits when stdout closes.
-
-Failure modes are *non-fatal*: sudo-not-cached, spawn-failed, parser-saw-nothing all degrade to "GPU panel shows `waiting for powermetrics…`" rather than crashing. IOReport-based no-sudo path is tracked in TODO.md.
+**Next** (live in `TODO.md`): macOS thermal/fan via IOReport (would also unlock the no-sudo GPU path), Phase 4 (Container awareness via Docker socket + cgroups), or Phase 5 (alert rules).
 
 Differentiators planned beyond htop: historical sparkline charts, modern theme, container/cgroup awareness, alert rules, and a Prometheus `/metrics` exporter. Explicit non-goals: Windows, GUI/Web UI, multi-machine view, record/replay.
+
+## Project skills
+
+Four project-scoped skills live under `.claude/skills/` and load automatically in Claude Code. Prefer invoking these over re-deriving the steps each session:
+
+- **`rust-phase-gate`** — strict local quality gate (`fmt --check` + `clippy -D warnings` + `test`). Run before declaring any chunk of work done.
+- **`tui-smoke-test`** — drives the TUI through `script` PTY so you can verify clean startup/shutdown without a real terminal.
+- **`add-collector`** — six-file wiring pattern for a new metric type plus the four common silent-failure modes (forgotten `Registry::register`, missing `SystemSource::refresh`, mistyped `MetricKey`, platform-cfg parser dead-code warnings).
+- **`push-and-watch-ci`** — commit (HEREDOC, file-by-name staging, Co-Authored-By), push, and `gh run watch` in the background. CI runs the same gate on `ubuntu-latest` + `macos-latest` matrix.
 
 ## Common commands
 
 ```bash
-cargo run                   # debug build, run TUI; press q or Ctrl-C to quit
-cargo run --release         # smoother sampling/UI
-cargo run -- --config <path> --debug   # custom TOML config + RUST_LOG=debug to stderr
+cargo run                              # debug build, run TUI; q or Ctrl-C to quit
+cargo run --release                    # smoother sampling/UI
+cargo run --release -- --gpu           # macOS only: enable GPU panel (sudo)
+cargo run -- --config <path> --debug   # custom TOML config + RUST_LOG=debug
 
-cargo test                          # unit tests (currently in src/state/history.rs)
-cargo test push_appends_and_caps    # run a single test by substring
+cargo test                          # 19 tests across history, format, gpu parser, pmset, hwmon, connections
+cargo test parses_gpu_power         # run a single test by substring
+cargo test connections::tests       # run all tests in one module
 
-# CI gate (run all three before declaring a phase done):
+# CI gate (mirror of GitHub Actions); see `rust-phase-gate` skill:
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -40,30 +41,46 @@ cargo test
 
 ### Smoke-testing the TUI without a real terminal
 
-`cargo run` requires a TTY (raw mode + alt screen). To verify cleanly from a non-interactive shell, wrap with `script` to provide a PTY:
+`cargo run` requires a TTY (raw mode + alt screen). From a non-interactive shell, wrap with `script` to provide a PTY:
 
 ```bash
-(sleep 0.8; printf 'q') | script -q /tmp/rmon.log target/release/resource-monitor
+(sleep 1.5; printf 'q') | script -q /tmp/rmon.log target/release/resource-monitor
 ```
 
-Exit code 0 + an alt-screen entry/exit pair (`?1049h` / `?1049l`) in the log means terminal restoration works.
+Exit code 0 + alt-screen entry/exit (`?1049h` / `?1049l`) in the log means terminal restoration works. Detail in the `tui-smoke-test` skill.
+
+## CI
+
+`.github/workflows/ci.yml` triggers on push and PR against `main`/`master`:
+
+- `fmt` job runs once on Ubuntu (formatting is platform-agnostic)
+- `gate` matrix runs `clippy -D warnings` + `test --locked` on `ubuntu-latest` and `macos-latest` because the codebase has cfg-gated paths (`collector/platform/{linux,macos}.rs`, `collector/gpu.rs` macOS-only, `collector/connections.rs` Linux-only) that won't be exercised on a single OS.
+- `Swatinem/rust-cache@v2` keeps cached runs in the 1–2 minute range.
+- Cancel-in-progress on the same ref so back-to-back pushes don't pile up.
 
 ## Architecture
 
 ### Three-thread model
 
-1. **Sampler thread** (`app::sampler_loop`) — runs every `config.sample_interval_ms` (default 1000ms). Builds a fresh `Snapshot`, walks the `Registry` calling `Collector::sample(&mut Snapshot)` on each, then `State::commit(snapshot)` which atomically replaces `current` and pushes every numeric value into its history ring buffer.
-2. **UI thread** (main, `App::event_loop`) — every `config.ui_tick_ms` (default 100ms): non-blocking `crossterm::event::poll`, `terminal.draw(|f| ui::render(f, &state))`. Reads via `state.with_view(|view| ...)`.
-3. **Exporter thread** (planned, Phase 6) — tokio + axum serving `/metrics`, reading the same `SharedState`.
+1. **Sampler thread** (`app::sampler_loop`) — runs every `config.sample_interval_ms` (default 1000ms). Calls `SystemSource::refresh` once, then walks the `Registry` calling `Collector::sample(&mut CollectCtx)` on each, then `State::commit(snapshot)`.
+2. **UI thread** (main, `App::event_loop`) — every `config.ui_tick_ms` (default 100ms): non-blocking `crossterm::event::poll`, `terminal.draw(|f| ui::render(f, &state, &mut ui_state, &theme))`. Reads via `state.with_view(|view| ...)`.
+3. **GPU reader thread** (`gpu-reader`, only when `--gpu` on macOS) — owned by `GpuCollector`, parses powermetrics stdout into a `Mutex<GpuStats>`. Killed via `setpgid`-rooted SIGKILL on Drop.
+4. **Exporter thread** (planned, Phase 6) — tokio + axum serving `/metrics`, reading the same `SharedState`.
 
-All three share one `Arc<State>` (alias `SharedState`); state is guarded by an internal `RwLock`. Sampler is the sole writer; UI and exporter are readers.
+All threads share one `Arc<State>` (alias `SharedState`); state is guarded by an internal `RwLock`. Sampler is the sole writer; UI and (future) exporter are readers.
 
 ### Data flow & key types
 
-- `state::Snapshot` is a flat `HashMap<MetricKey, f64>` plus capture timestamp. Collectors **accumulate into the same Snapshot** rather than returning their own — keeps allocation per tick to one map.
-- `MetricKey` naming convention: `<group>.<sub>` (e.g. `cpu.total`, `cpu.core.0`, `mem.used_bytes`, `disk.io.read_bps`). Use this when adding new collectors so the UI/exporter can address series uniformly.
-- `state::History` is a per-key `VecDeque<f64>` ring buffer, capacity shared across all series (default 600 → 10 min @ 1Hz). `History::push_from(&Snapshot)` appends every series in lockstep.
-- `state::StateView` is the read-side handle exposed inside `with_view` — gives borrowed `current`, `history`, `last_sample_at`, and a monotonic `sample_seq` counter.
+- `state::Snapshot` carries:
+  - `numeric: HashMap<MetricKey, f64>` — the time-series values that flow into the history ring buffer
+  - `processes: Vec<ProcessSnapshot>`, `disks: Vec<DiskSnapshot>`, `networks: Vec<NetworkSnapshot>`, `sensors: Vec<SensorReading>`, `batteries: Vec<BatteryReading>` — point-in-time structured data, **not** historical (lists like processes are too dynamic for series storage)
+- `MetricKey` naming convention: `<group>.<sub>` (e.g. `cpu.core.0`, `mem.used_bytes`, `net.eth0.rx_bps`, `sensor.temp.cpu_die`, `gpu.usage`). When adding a collector, follow this so widgets and the future exporter can address series uniformly.
+- `state::History` is a per-key `VecDeque<f64>` ring buffer, capacity shared across all series (default 600 → 10 min @ 1Hz). `History::push_from(&Snapshot)` appends every numeric series in lockstep.
+- `state::StateView` is the read-side handle exposed inside `with_view` — borrowed `current: Option<&Snapshot>` and `history: &History`. Anything else needs to be added to `StateInner` first and then re-exposed here.
+
+### `CollectCtx` indirection
+
+The `Collector::sample` signature takes `&mut CollectCtx<'_> { snapshot, system: &SystemSource }` rather than just a `&mut Snapshot` so collectors can read shared sysinfo handles (`system.system`, `system.disks`, `system.networks`, `system.users`) and the per-tick elapsed time (`system.last_refresh_elapsed`) used to compute network rates.
 
 ### Terminal lifecycle
 
@@ -71,16 +88,31 @@ All three share one `Arc<State>` (alias `SharedState`); state is guarded by an i
 
 ### Shutdown
 
-`Arc<AtomicBool>` shared between UI and sampler. UI sets it on `q`/`Ctrl-C`; sampler observes via `sleep_until_or_shutdown` (50ms-chunked sleep) so quit feels instant even at long sampling intervals.
+`Arc<AtomicBool>` shared between UI and sampler. UI sets it on `q`/`Ctrl-C`; sampler observes via `sleep_until_or_shutdown` (50ms-chunked sleep) so quit feels instant even at long sampling intervals. `GpuCollector::Drop` then SIGKILLs the powermetrics process group.
 
 ## Conventions
 
-- **`#![allow(dead_code)]` in `src/main.rs`** is intentional Phase 0 scaffolding — the Registry/MetricKey/Snapshot/History APIs are wired but not yet called. Remove the allow once Phase 1 collectors land.
-- **Edition 2024** (`Cargo.toml`). `let`-chains are available and used in `app::event_loop`.
+- **Edition 2024** (`Cargo.toml`). `let`-chains are in use (`app::event_loop`, `gpu::parse_line`).
 - **Errors**: `anyhow::Result` at app boundaries; collectors should `tracing::warn!` on per-sample failures (logged by `Registry::sample_all`) rather than aborting the whole tick.
-- **Logs go to stderr with ANSI off** so they don't fight the TUI on the same fd. Use `--debug` or `RUST_LOG=...` to surface them.
-- **Phase discipline**: keep collectors decoupled from UI. A new metric is added by registering a `Collector` impl that writes to `Snapshot::set("group.sub", value)` — no UI changes required for the value to start flowing into history. UI changes happen only when you want to *render* the new series.
+- **Logs go to stderr with ANSI off** so they don't fight the TUI on the same fd. Use `--debug` or `RUST_LOG=...` to surface them; redirect with `2>/tmp/rmon.log` to view live.
+- **Phase discipline**: keep collectors decoupled from UI. A new metric is added by registering a `Collector` that writes to `Snapshot::set("group.sub", value)` — no UI changes needed for the value to flow into history. UI changes happen only when you want to *render* it. Full pattern in the `add-collector` skill.
+- **Platform-cfg'd parsers stay testable**: when a parser is only called from `#[cfg(target_os = "linux")]` code, gate it with `#[cfg(any(test, target_os = "linux"))]` so its tests still run on the macOS CI runner. See `collector/connections.rs` for the pattern.
+- **No `git add -A`** — stage by name. The repo has no secrets right now but this avoids future accidents (`.env`, large binaries).
 
 ## Platform-specific work
 
-The plan calls for `/proc` + `procfs` on Linux and Mach/sysctl/IOKit on macOS for higher-precision metrics, behind `#[cfg(target_os = "...")]`. Phase 1 starts with the cross-platform `sysinfo` crate as the baseline; per-platform fast paths come later. Apple Silicon GPU (Phase 3) will spawn `powermetrics` as a child process — needs sudo, gated behind a CLI flag.
+- **Cross-platform baseline**: `sysinfo` covers CPU/Mem/Disk/Process/Network. `SystemSource` owns the `System`, `Disks`, `Networks`, `Users` handles and refreshes them once per tick.
+- **Linux-specific** (`collector/platform/linux.rs` + `collector/connections.rs`): hwmon walk for temp/fan, `/sys/class/power_supply/BAT*` for battery status + time-remaining, `/proc/net/{tcp,tcp6,udp,udp6}` for connection state counts.
+- **macOS-specific** (`collector/platform/macos.rs` + `collector/gpu.rs`): `pmset -g batt` parser for battery, `sudo powermetrics --samplers gpu_power` subprocess for GPU. Apple Silicon thermal/fan via IOReport private framework is on the roadmap (would also unlock a no-sudo GPU path).
+
+### Phase 3 GPU specifics
+
+The GPU collector is **opt-in** (`--gpu`), **macOS-only**, and gated behind sudo:
+
+1. `main.rs::ensure_gpu_prereqs` runs `sudo -v` *before* entering raw mode so the password prompt is reachable.
+2. `GpuCollector::try_new` probes `sudo -n true`, then spawns `sudo powermetrics --samplers gpu_power -i 1000` with `setpgid(0, 0)` via `pre_exec` so sudo + powermetrics share a process group.
+3. A dedicated `gpu-reader` thread parses `GPU HW active residency` / `GPU active frequency` / `GPU Power` lines into a `Mutex<GpuStats>`, stamping `last_update`.
+4. `GpuCollector::sample` clones the mutex; if `last_update` is older than 5 s the stats are treated as stale and no numerics are emitted (panel falls back to "waiting for powermetrics…").
+5. `Drop for GpuCollector` SIGKILLs the entire pgid so powermetrics doesn't outlive a clean shutdown. Caveat: if our process is itself SIGKILL'd the child still leaks (no portable fix on macOS).
+
+Failure modes are *non-fatal*: sudo-not-cached, spawn-failed, parser-saw-nothing all degrade to the empty-state widget rather than crashing.
