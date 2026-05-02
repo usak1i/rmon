@@ -36,6 +36,8 @@ impl Collector for SensorsCollector {
     }
 
     fn sample(&mut self, ctx: &mut CollectCtx<'_>) -> Result<()> {
+        // `mut` is only used on macOS (the IOReport sampler appends).
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut readings = platform::read_sensors();
 
         #[cfg(target_os = "macos")]
