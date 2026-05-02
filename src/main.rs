@@ -11,12 +11,35 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use tracing_subscriber::EnvFilter;
 
 use crate::app::App;
 use crate::config::Config;
 use crate::state::SharedState;
+
+/// GPU monitoring mode selected on the CLI. Apple Silicon only; Linux
+/// falls back to `Off` for any non-`Off` value.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum GpuMode {
+    /// No GPU panel.
+    #[default]
+    Off,
+    /// `sudo powermetrics --samplers gpu_power`. Prompts for sudo
+    /// before the TUI starts. Emits usage + frequency + power.
+    Powermetrics,
+    /// Private IOReport framework. No sudo required. Emits usage only;
+    /// power is already reported by the Sensors panel via the Energy
+    /// Model sampler.
+    Ioreport,
+}
+
+impl GpuMode {
+    pub fn enabled(self) -> bool {
+        !matches!(self, GpuMode::Off)
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -33,10 +56,19 @@ struct Cli {
     #[arg(long)]
     debug: bool,
 
-    /// Enable GPU monitoring (macOS Apple Silicon: spawns `sudo powermetrics`).
-    /// You'll be prompted to authenticate with sudo before the TUI starts.
-    #[arg(long)]
-    gpu: bool,
+    /// Enable GPU monitoring on macOS Apple Silicon.
+    ///
+    /// Bare `--gpu` is shorthand for `--gpu=powermetrics` (back-compat).
+    /// See the per-mode descriptions below.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "MODE",
+        num_args = 0..=1,
+        default_value_t = GpuMode::Off,
+        default_missing_value = "powermetrics",
+    )]
+    gpu: GpuMode,
 
     /// Expose a Prometheus `/metrics` endpoint at the given address.
     /// Disabled by default to keep idle resource usage low.
@@ -62,7 +94,7 @@ fn main() -> Result<()> {
         "loaded config"
     );
 
-    let gpu_enabled = if cli.gpu { ensure_gpu_prereqs() } else { false };
+    let gpu_mode = resolve_gpu_mode(cli.gpu);
 
     let state: SharedState = Arc::new(state::State::new(config.history_capacity));
 
@@ -78,7 +110,7 @@ fn main() -> Result<()> {
         None
     };
 
-    let mut app = App::new(state, config, gpu_enabled, alert_rules);
+    let mut app = App::new(state, config, gpu_mode, alert_rules);
     let result = app.run();
     drop(exporter); // graceful shutdown of the /metrics server
     result
@@ -98,9 +130,24 @@ fn init_tracing(debug: bool) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn ensure_gpu_prereqs() -> bool {
+fn resolve_gpu_mode(requested: GpuMode) -> GpuMode {
+    match requested {
+        GpuMode::Off => GpuMode::Off,
+        GpuMode::Powermetrics => {
+            if ensure_powermetrics_prereqs() {
+                GpuMode::Powermetrics
+            } else {
+                GpuMode::Off
+            }
+        }
+        GpuMode::Ioreport => GpuMode::Ioreport,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_powermetrics_prereqs() -> bool {
     use std::process::Command;
-    eprintln!("GPU monitoring needs sudo to run powermetrics. Authenticating...");
+    eprintln!("GPU monitoring (powermetrics) needs sudo. Authenticating...");
     match Command::new("sudo").arg("-v").status() {
         Ok(s) if s.success() => true,
         Ok(_) => {
@@ -115,7 +162,9 @@ fn ensure_gpu_prereqs() -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn ensure_gpu_prereqs() -> bool {
-    eprintln!("--gpu is currently macOS-only (Apple Silicon). Continuing without GPU.");
-    false
+fn resolve_gpu_mode(requested: GpuMode) -> GpuMode {
+    if requested.enabled() {
+        eprintln!("--gpu is currently macOS-only (Apple Silicon). Continuing without GPU.");
+    }
+    GpuMode::Off
 }

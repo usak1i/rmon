@@ -16,7 +16,7 @@ mod ioreport;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use ioreport::IoReportSampler;
+pub use ioreport::{IoReportGpuSampler, IoReportSampler};
 #[cfg(target_os = "macos")]
 pub use macos::{read_batteries, read_sensors};
 

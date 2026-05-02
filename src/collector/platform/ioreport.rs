@@ -68,6 +68,16 @@ unsafe extern "C" {
 
     fn IOReportSimpleGetIntegerValue(channel: Opaque, index: i32) -> i64;
     fn IOReportChannelGetChannelName(channel: Opaque) -> CFStringRef;
+
+    /// Number of states (P-states + idle states) on a histogram-style
+    /// channel like the GPU Stats group's per-state residency counters.
+    fn IOReportStateGetCount(channel: Opaque) -> i32;
+    /// State name at `idx`, e.g. "OFF" / "DOWN" / "IDLE" or numeric
+    /// P-state labels. Get-rule reference.
+    fn IOReportStateGetNameForIndex(channel: Opaque, idx: i32) -> CFStringRef;
+    /// Residency in nanoseconds for state at `idx`. On a delta sample
+    /// this is the time spent in the state since the previous sample.
+    fn IOReportStateGetResidency(channel: Opaque, idx: i32) -> i64;
 }
 
 /// Stateful sampler. Owns the subscription + previous full sample so
@@ -123,7 +133,12 @@ impl IoReportSampler {
         };
         if subscription.is_null() {
             tracing::debug!("IOReport: CreateSubscription failed");
-            unsafe { CFRelease(channels as CFTypeRef) };
+            unsafe {
+                if !subscribed_channels.is_null() {
+                    CFRelease(subscribed_channels as CFTypeRef);
+                }
+                CFRelease(channels as CFTypeRef);
+            }
             return None;
         }
 
@@ -240,4 +255,188 @@ fn extract_power_readings(delta: Opaque, dt_secs: f64) -> Vec<SensorReading> {
 /// the existing widget formatting.
 fn short_name(channel_name: &str) -> &str {
     channel_name.strip_suffix(" Energy").unwrap_or(channel_name)
+}
+
+/// IOReport-backed GPU usage sampler. Subscribes to the "GPU Stats"
+/// group, whose channels expose per-state residency counters
+/// (nanoseconds spent in each P-state). Each sample diffs against the
+/// previous so we can derive `active / (active + idle)` ratios.
+///
+/// Only emits `gpu.usage` (0..100). Frequency would require a per-chip
+/// frequency table which IOReport doesn't expose uniformly; the
+/// existing powermetrics path covers freq when the user opts into it.
+/// Power is already reported by `IoReportSampler` (Energy Model group).
+pub struct IoReportGpuSampler {
+    subscription: Opaque,
+    channels: Opaque,
+    subscribed_channels: Opaque,
+    /// Previous full sample. Cleared on transient `IOReportCreateSamples`
+    /// failure so the next successful tick doesn't deliver a delta with
+    /// a wildly long span.
+    prev: Option<Opaque>,
+}
+
+unsafe impl Send for IoReportGpuSampler {}
+
+impl IoReportGpuSampler {
+    pub fn new() -> Option<Self> {
+        let group = CFString::new("GPU Stats");
+        let channels = unsafe {
+            IOReportCopyChannelsInGroup(group.as_concrete_TypeRef(), std::ptr::null(), 0, 0, 0)
+        };
+        if channels.is_null() {
+            tracing::debug!("IOReport: no channels in GPU Stats group");
+            return None;
+        }
+
+        let mut subscribed_channels: Opaque = std::ptr::null();
+        let subscription = unsafe {
+            IOReportCreateSubscription(
+                std::ptr::null(),
+                channels,
+                &mut subscribed_channels as *mut Opaque,
+                0,
+                std::ptr::null(),
+            )
+        };
+        if subscription.is_null() {
+            tracing::debug!("IOReport: GPU Stats CreateSubscription failed");
+            unsafe {
+                if !subscribed_channels.is_null() {
+                    CFRelease(subscribed_channels as CFTypeRef);
+                }
+                CFRelease(channels as CFTypeRef);
+            }
+            return None;
+        }
+
+        Some(Self {
+            subscription,
+            channels,
+            subscribed_channels,
+            prev: None,
+        })
+    }
+
+    /// Returns `Some(usage_percent)` once a delta is available, `None`
+    /// on the very first call or any sampling failure.
+    pub fn sample(&mut self) -> Option<f64> {
+        let raw_sample =
+            unsafe { IOReportCreateSamples(self.subscription, self.channels, std::ptr::null()) };
+        if raw_sample.is_null() {
+            if let Some(prev) = self.prev.take() {
+                unsafe { CFRelease(prev as CFTypeRef) };
+            }
+            return None;
+        }
+
+        let mut usage = None;
+        if let Some(prev) = self.prev.take() {
+            let delta = unsafe { IOReportCreateSamplesDelta(prev, raw_sample, std::ptr::null()) };
+            unsafe { CFRelease(prev as CFTypeRef) };
+            if !delta.is_null() {
+                usage = extract_gpu_usage(delta);
+            }
+        }
+        self.prev = Some(raw_sample);
+        usage
+    }
+}
+
+impl Drop for IoReportGpuSampler {
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev.take() {
+            unsafe { CFRelease(prev as CFTypeRef) };
+        }
+        unsafe {
+            if !self.subscribed_channels.is_null() {
+                CFRelease(self.subscribed_channels as CFTypeRef);
+            }
+            CFRelease(self.channels as CFTypeRef);
+            CFRelease(self.subscription as CFTypeRef);
+        }
+    }
+}
+
+/// Walk the channels in `delta` and sum residency across P-states to
+/// derive a 0..100 usage percentage. Takes ownership of `delta`.
+fn extract_gpu_usage(delta: Opaque) -> Option<f64> {
+    let dict: CFDictionary =
+        unsafe { CFDictionary::wrap_under_create_rule(delta as CFDictionaryRef) };
+    let key = CFString::new("IOReportChannels");
+    let raw = match dict.find(key.as_concrete_TypeRef() as *const c_void) {
+        Some(v) => *v,
+        None => return None,
+    };
+    if raw.is_null() {
+        return None;
+    }
+    let channels: CFArray<CFTypeRef> = unsafe { CFArray::wrap_under_get_rule(raw as CFArrayRef) };
+
+    let mut total_ns: i128 = 0;
+    let mut idle_ns: i128 = 0;
+    let mut saw_state = false;
+
+    for i in 0..channels.len() {
+        let Some(channel_ptr) = channels.get(i) else {
+            continue;
+        };
+        let channel: Opaque = *channel_ptr as Opaque;
+        if channel.is_null() {
+            continue;
+        }
+        let count = unsafe { IOReportStateGetCount(channel) };
+        if count <= 0 {
+            continue;
+        }
+        saw_state = true;
+        for j in 0..count {
+            let name_ref = unsafe { IOReportStateGetNameForIndex(channel, j) };
+            if name_ref.is_null() {
+                continue;
+            }
+            let name = unsafe { CFString::wrap_under_get_rule(name_ref) }.to_string();
+            let residency = unsafe { IOReportStateGetResidency(channel, j) };
+            // Counter wrap / negative defense — treat as zero rather
+            // than poisoning the sum.
+            if residency <= 0 {
+                continue;
+            }
+            total_ns += residency as i128;
+            if is_idle_state(&name) {
+                idle_ns += residency as i128;
+            }
+        }
+    }
+
+    if !saw_state || total_ns == 0 {
+        return None;
+    }
+    let active = (total_ns - idle_ns).max(0);
+    Some(active as f64 / total_ns as f64 * 100.0)
+}
+
+/// IOReport state names on the GPU Stats group's per-state channels
+/// have a fixed set of "off-bus" labels for non-active power states;
+/// everything else (numeric P-state names) counts as active.
+fn is_idle_state(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_uppercase().as_str(),
+        "OFF" | "DOWN" | "IDLE" | "DCS",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_idle_state;
+
+    #[test]
+    fn idle_state_classification() {
+        for name in ["OFF", "DOWN", "IDLE", "DCS", " idle ", "off"] {
+            assert!(is_idle_state(name), "expected {name:?} to be idle");
+        }
+        for name in ["P1", "P-State 4", "1", "ACTIVE", "P0"] {
+            assert!(!is_idle_state(name), "expected {name:?} to be active");
+        }
+    }
 }

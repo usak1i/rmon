@@ -5,6 +5,8 @@ mod cpu;
 mod disk;
 #[cfg(target_os = "macos")]
 mod gpu;
+#[cfg(target_os = "macos")]
+mod gpu_ioreport;
 mod memory;
 mod network;
 mod platform;
@@ -17,6 +19,8 @@ pub use cpu::CpuCollector;
 pub use disk::DiskCollector;
 #[cfg(target_os = "macos")]
 pub use gpu::GpuCollector;
+#[cfg(target_os = "macos")]
+pub use gpu_ioreport::GpuIoReportCollector;
 pub use memory::MemoryCollector;
 pub use network::NetworkCollector;
 pub use process::ProcessCollector;

@@ -14,6 +14,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use crate::GpuMode;
 use crate::alert::{AlertEvaluator, AlertEventKind, AlertRule, AlertSeverity};
 use crate::collector::{
     ContainerCollector, CpuCollector, DiskCollector, MemoryCollector, NetworkCollector,
@@ -32,7 +33,7 @@ pub struct App {
     config: Config,
     ui: UiState,
     theme: Theme,
-    gpu_enabled: bool,
+    gpu_mode: GpuMode,
     alert_rules: Vec<AlertRule>,
 }
 
@@ -40,15 +41,15 @@ impl App {
     pub fn new(
         state: SharedState,
         config: Config,
-        gpu_enabled: bool,
+        gpu_mode: GpuMode,
         alert_rules: Vec<AlertRule>,
     ) -> Self {
         Self {
             state,
             config,
-            ui: UiState::new(gpu_enabled),
+            ui: UiState::new(gpu_mode.enabled()),
             theme: Theme::dark(),
-            gpu_enabled,
+            gpu_mode,
             alert_rules,
         }
     }
@@ -61,7 +62,7 @@ impl App {
         let sampler_handle = spawn_sampler(
             self.state.clone(),
             self.config.clone(),
-            self.gpu_enabled,
+            self.gpu_mode,
             self.alert_rules.clone(),
             shutdown.clone(),
         );
@@ -164,7 +165,7 @@ impl App {
                 self.ui.show_help = false;
                 self.ui.show_alerts = false;
             }
-            (KeyCode::Tab, _) => self.ui.focus = self.ui.focus.next(self.gpu_enabled),
+            (KeyCode::Tab, _) => self.ui.focus = self.ui.focus.next(self.gpu_mode.enabled()),
             (KeyCode::Up, _) => move_selection(&mut self.ui, -1),
             (KeyCode::Down, _) => move_selection(&mut self.ui, 1),
             (KeyCode::PageUp, _) => move_selection(&mut self.ui, -10),
@@ -290,20 +291,20 @@ fn install_panic_hook() {
 fn spawn_sampler(
     state: SharedState,
     config: Config,
-    gpu_enabled: bool,
+    gpu_mode: GpuMode,
     alert_rules: Vec<AlertRule>,
     shutdown: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name("sampler".into())
-        .spawn(move || sampler_loop(state, config, gpu_enabled, alert_rules, shutdown))
+        .spawn(move || sampler_loop(state, config, gpu_mode, alert_rules, shutdown))
         .expect("failed to spawn sampler thread")
 }
 
 fn sampler_loop(
     state: SharedState,
     config: Config,
-    gpu_enabled: bool,
+    gpu_mode: GpuMode,
     alert_rules: Vec<AlertRule>,
     shutdown: Arc<AtomicBool>,
 ) {
@@ -318,14 +319,19 @@ fn sampler_loop(
     registry.register(Box::new(ProcessCollector::new()));
 
     #[cfg(target_os = "macos")]
-    if gpu_enabled {
-        match crate::collector::GpuCollector::try_new() {
+    match gpu_mode {
+        GpuMode::Off => {}
+        GpuMode::Powermetrics => match crate::collector::GpuCollector::try_new() {
             Ok(c) => registry.register(Box::new(c)),
-            Err(e) => tracing::warn!(error = %e, "GPU collector disabled"),
-        }
+            Err(e) => tracing::warn!(error = %e, "GPU (powermetrics) collector disabled"),
+        },
+        GpuMode::Ioreport => match crate::collector::GpuIoReportCollector::try_new() {
+            Ok(c) => registry.register(Box::new(c)),
+            Err(e) => tracing::warn!(error = %e, "GPU (ioreport) collector disabled"),
+        },
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = gpu_enabled;
+    let _ = gpu_mode;
 
     let mut evaluator = AlertEvaluator::new(alert_rules);
 

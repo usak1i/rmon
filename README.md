@@ -13,7 +13,7 @@ Built in numbered phases. Currently shipped:
 | 0 | Scaffolding — three-thread sampler/UI/exporter model |
 | 1 | CPU / Memory / Disk / Process collectors via `sysinfo`, sparklines, dark theme, focus / sort / search / kill / help keys |
 | 2 | Network (per-interface RX/TX) + Sensors (battery on both platforms; Linux hwmon temp/fan) |
-| 3 | Apple Silicon GPU via `sudo powermetrics` (opt-in) |
+| 3 | Apple Silicon GPU via `sudo powermetrics` *or* sudo-less IOReport (opt-in) |
 | 4 | Container panel (Docker via `bollard`) + Linux cgroup PID grouping (`g` toggle) |
 | 5 | TOML alert rules (`[[alert]]` blocks) — firing tints panel borders, `a` opens an overlay |
 | 6 | Apple Silicon CPU/GPU/ANE power via private IOReport (no sudo) + Prometheus `/metrics` exporter |
@@ -43,12 +43,17 @@ source $HOME/.cargo/env
 ## Run
 
 ```bash
-cargo run --release                       # default
-cargo run --release -- --gpu              # macOS only: enable GPU panel
-cargo run --release -- --config my.toml   # custom config path
-cargo run --release -- --debug            # verbose tracing on stderr
+cargo run --release                                  # default
+cargo run --release -- --gpu                         # macOS Apple Silicon: GPU panel via sudo+powermetrics
+cargo run --release -- --gpu=ioreport                # macOS Apple Silicon: GPU panel via IOReport (no sudo)
+cargo run --release -- --gpu=off                     # explicitly disable (same as omitting the flag)
+cargo run --release -- --config my.toml              # custom config path
+cargo run --release -- --debug                       # verbose tracing on stderr
 cargo run --release -- --prometheus 127.0.0.1:9091   # expose /metrics
 ```
+
+`--gpu` accepts `off | powermetrics | ioreport`. Bare `--gpu` is shorthand
+for `--gpu=powermetrics` so existing invocations keep working.
 
 `--help` for the full flag list.
 
@@ -104,18 +109,18 @@ Theme / alert / Prometheus settings will land in later phases — see
 
 ### macOS GPU (`--gpu`)
 
-GPU monitoring spawns `sudo powermetrics --samplers gpu_power -i 1000` because
-Apple gates GPU stats behind root. The flow:
+Two backends, picked by the `--gpu` flag:
 
-1. Before entering the TUI, `sudo -v` runs interactively so the password
-   prompt is reachable. If you've recently authenticated, this is a no-op.
-2. The sampler thread spawns powermetrics; a dedicated `gpu-reader` thread
-   parses its stdout into the `gpu.usage` / `gpu.freq_mhz` / `gpu.power_mw`
-   numerics.
-3. On `q` / `Ctrl-C`, the powermetrics child gets SIGKILL'd cleanly.
+- `--gpu` / `--gpu=powermetrics` — spawns `sudo powermetrics --samplers
+  gpu_power -i 1000`. Emits `gpu.usage` + `gpu.freq_mhz` + `gpu.power_mw`.
+  `sudo -v` runs interactively before entering the TUI; on `q` / `Ctrl-C`
+  the powermetrics child is SIGKILL'd cleanly via its process group.
+- `--gpu=ioreport` — subscribes to the private `IOReport` framework's
+  "GPU Stats" group (no sudo). Emits `gpu.usage` only; power is already
+  reported under the Sensors panel via the Energy Model sampler, and a
+  per-chip frequency table isn't exposed uniformly through IOReport.
 
-If you don't want the sudo dance, leave `--gpu` off. An IOReport-based
-no-sudo path is on the roadmap.
+Leaving `--gpu` off (the default) hides the GPU panel entirely.
 
 ### Linux sensors
 

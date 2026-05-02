@@ -17,6 +17,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - `[x]` Bollard upgrade — replaced the docker CLI subprocess with bollard 0.20 driven by a current-thread tokio runtime on the `container-poller` thread. Pulls in tokio (`net`/`rt`/`time` only) so Phase 6 Prometheus exporter can reuse it. Pure CPU% formula extracted as testable fn.
 - `[x]` IOReport (B.2 partial) — Apple Silicon CPU / GPU / ANE *power* readings (Watts, no sudo) via the private IOReport framework. `build.rs` adds `/usr/lib` to the linker search path so `libIOReport.dylib` resolves on macOS 26. SensorsCollector holds an optional sampler; `power` category surfaces in the Sensors widget. Thermal sensors and the no-sudo GPU usage path stay as carryovers.
 - `[x]` Phase 6 — Prometheus `/metrics` exporter, opt-in via `--prometheus <addr:port>`. Dedicated thread driving a current-thread tokio runtime + axum; graceful shutdown via `tokio::sync::Notify`. `MetricKey` → Prometheus name with sanitiser (dots/dashes/slashes → underscore, leading-digit / non-ASCII rejected) + `rmon_` prefix. 5 unit tests on the sanitiser.
+- `[x]` Sudo-less GPU usage — `--gpu` is now a value-enum (`off | powermetrics | ioreport`); bare `--gpu` still maps to `powermetrics` for back-compat. The `ioreport` arm subscribes to the IOReport "GPU Stats" group, sums P-state residency deltas, and emits `gpu.usage` (only). Per-chip frequency tables aren't surfaced uniformly through IOReport so `gpu.freq_mhz` is left to the powermetrics path; power continues to flow through the Sensors panel via the Energy Model sampler.
 
 ---
 
@@ -52,13 +53,18 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 Path A (sudo + powermetrics) is shipped. Remaining items:
 
-- [ ] **Path B (IOReport, no sudo)**: extend the existing IOReport
-  sampler with a second subscription on the `GPU Stats` group to read
-  active vs idle residency. Promote `--gpu` to a value-enum
-  (`off|powermetrics|ioreport`) and default to `ioreport` on macOS so
-  the sudo prompt is opt-in. The IOReport FFI itself is now in place
-  (`collector/platform/ioreport.rs`) — this is mostly channel-name
-  matching + state-residency math.
+- [x] **Path B (IOReport, no sudo)**: `--gpu` is now a value-enum
+  (`off | powermetrics | ioreport`); bare `--gpu` keeps mapping to
+  `powermetrics` for back-compat. The `ioreport` arm subscribes to the
+  IOReport "GPU Stats" group via a sibling `IoReportGpuSampler`, sums
+  per-state residency deltas, and emits `gpu.usage` (0..100). Default
+  remains `off` — `ioreport` is still opt-in for now since channel
+  presence varies by chip generation.
+- [ ] **GPU frequency / freq table for IOReport path**: IOReport state
+  names on the GPU PH channels don't carry frequency labels uniformly,
+  so `gpu.freq_mhz` is currently powermetrics-only. Adding a per-chip
+  frequency table would let the IOReport path emit a weighted average
+  too — needs `sysctl hw.optional.arm.SOC_*` chip detection.
 - [ ] **Additional samplers**: `--samplers ane_power`, `media_power`, `cpu_power` would let us emit `gpu.ane_*`, `gpu.media_*`, package power. Trade-off is more parser surface area.
 - [x] **Stale-data check**: GpuStats tracks `last_update`; sample() skips emitting numerics if older than 5 s, so the widget falls back to its empty state instead of a frozen reading.
 - [x] **Process-group containment**: `Command::pre_exec` sets `setpgid(0, 0)` so sudo + powermetrics share a pgid; `Drop` kills the whole group so powermetrics doesn't outlive a clean shutdown. Note: this only helps when our process exits cleanly — a SIGKILL of our parent still leaks the child (no portable way to fix on macOS).
