@@ -16,21 +16,20 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 2.5 — Carryover from Phase 2
 
-Items the original Phase 2 plan listed that were intentionally deferred to
-keep Phase 2 ship-able. Pick these up before/during Phase 3.
-
+- [x] **Battery time-remaining + status** — `BatteryReading` with status
+  enum + estimated minutes. macOS via richer `pmset -g batt` parser; Linux
+  via `time_to_empty_now` / `time_to_full_now`.
+- [x] **Linux connection counts** — TCP states (ESTABLISHED / LISTEN /
+  TIME_WAIT) and UDP totals from `/proc/net/{tcp,tcp6,udp,udp6}`. Surfaced
+  as a footer line in the Network widget when present.
 - [ ] **macOS thermal/fan via IOReport** — Apple Silicon has no public SMC
   equivalent for die temperatures. Bind to the private `IOReport` framework
   via a small FFI shim. Emit `sensor.temp.cpu_die`, `sensor.fan.<idx>` etc.
   alongside the Linux hwmon path.
-- [ ] **Battery time-remaining + AC status** — Phase 2 ships only charge %.
-  Linux: read `time_to_empty_now` / `time_to_full_now` and the `AC*/online`
-  flag. macOS: parse the additional fields already present in `pmset -g batt`
-  (`5:23 remaining`, `discharging` / `charged`).
-- [ ] **Linux connection counts** — parse `/proc/net/{tcp,tcp6,udp,udp6}`,
-  count by state (LISTEN, ESTABLISHED, TIME_WAIT). Add to Network panel
-  footer or as a small inline strip. macOS deferred indefinitely
-  (`lsof -i` is slow and privileged — not worth the UX cost).
+- [ ] **AC online indicator** — battery `status` already implies the
+  charging state, but a dedicated AC sensor (charging cable plugged but
+  battery full) would be honest. Linux `/sys/class/power_supply/AC*/online`,
+  macOS the "Now drawing from 'AC Power'" header line in pmset.
 - [ ] **Per-process network IO** — sysinfo doesn't expose this; needs eBPF
   on Linux and `nettop` on macOS. Genuinely hard, only worth it if a user
   asks.
@@ -48,8 +47,8 @@ Path A (sudo + powermetrics) is shipped. Remaining items:
 
 - [ ] **Path B (IOReport, no sudo)**: bind to the private `IOReport` framework. No sudo, but version-fragile across macOS releases. Gate behind `--gpu=ioreport`.
 - [ ] **Additional samplers**: `--samplers ane_power`, `media_power`, `cpu_power` would let us emit `gpu.ane_*`, `gpu.media_*`, package power. Trade-off is more parser surface area.
-- [ ] **Stale-data indicator**: timestamp the last successful parse, dim the GPU panel if older than 5 s (powermetrics dying mid-run currently looks like a frozen reading).
-- [ ] **Process-group containment**: powermetrics is currently orphaned if our process is SIGKILL'd. Use `setpgid` so the OS reaps the child too.
+- [x] **Stale-data check**: GpuStats tracks `last_update`; sample() skips emitting numerics if older than 5 s, so the widget falls back to its empty state instead of a frozen reading.
+- [x] **Process-group containment**: `Command::pre_exec` sets `setpgid(0, 0)` so sudo + powermetrics share a pgid; `Drop` kills the whole group so powermetrics doesn't outlive a clean shutdown. Note: this only helps when our process exits cleanly — a SIGKILL of our parent still leaks the child (no portable way to fix on macOS).
 
 ### NVIDIA Linux (Phase 3.5)
 - [ ] Detect `libnvidia-ml.so` at runtime; if present use `nvml-wrapper` for utilisation/VRAM/temp

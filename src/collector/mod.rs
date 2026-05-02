@@ -1,3 +1,4 @@
+mod connections;
 mod cpu;
 mod disk;
 #[cfg(target_os = "macos")]

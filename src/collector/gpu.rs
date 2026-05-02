@@ -8,19 +8,27 @@
 //! "Path B" in TODO.md.
 
 use std::io::{BufRead, BufReader};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
 use super::{CollectCtx, Collector};
+
+/// If the reader thread hasn't pushed an update in this long, treat the
+/// stats as stale (powermetrics likely died) and stop emitting numerics so
+/// the GPU panel falls back to its empty state.
+const STALE_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default, Clone)]
 struct GpuStats {
     usage: Option<f64>,
     freq_mhz: Option<f64>,
     power_mw: Option<f64>,
+    last_update: Option<Instant>,
 }
 
 pub struct GpuCollector {
@@ -40,13 +48,23 @@ impl GpuCollector {
             anyhow::bail!("sudo timestamp not cached; run `sudo -v` first");
         }
 
-        let mut child = Command::new("sudo")
-            .args(["powermetrics", "--samplers", "gpu_power", "-i", "1000"])
+        let mut cmd = Command::new("sudo");
+        cmd.args(["powermetrics", "--samplers", "gpu_power", "-i", "1000"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .spawn()
-            .context("spawning powermetrics")?;
+            .stdin(Stdio::null());
+        // Put sudo + powermetrics in their own process group so we can kill
+        // the whole subtree on Drop. Without this, killing `sudo` orphans
+        // `powermetrics` to launchd and it keeps running.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().context("spawning powermetrics")?;
 
         let stdout = child
             .stdout
@@ -70,6 +88,12 @@ impl Collector for GpuCollector {
 
     fn sample(&mut self, ctx: &mut CollectCtx<'_>) -> Result<()> {
         let stats = self.state.lock().expect("gpu state poisoned").clone();
+        let fresh = stats
+            .last_update
+            .is_some_and(|t| Instant::now().duration_since(t) < STALE_AFTER);
+        if !fresh {
+            return Ok(());
+        }
         if let Some(u) = stats.usage {
             ctx.snapshot.set("gpu.usage", u);
         }
@@ -85,7 +109,15 @@ impl Collector for GpuCollector {
 
 impl Drop for GpuCollector {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        // Kill the entire process group rooted at sudo's PID so powermetrics
+        // (sudo's child) doesn't get reparented to launchd. Falls back to a
+        // single-process kill if the group send fails for any reason.
+        let pid = self.child.id() as libc::pid_t;
+        unsafe {
+            if libc::kill(-pid, libc::SIGKILL) != 0 {
+                let _ = self.child.kill();
+            }
+        }
         let _ = self.child.wait();
     }
 }
@@ -106,6 +138,7 @@ fn reader_loop(stdout: ChildStdout, state: Arc<Mutex<GpuStats>>) {
             if let Some(v) = delta.power_mw {
                 s.power_mw = Some(v);
             }
+            s.last_update = Some(Instant::now());
         }
     }
 }

@@ -32,6 +32,17 @@ impl Collector for SensorsCollector {
                 .set(format!("sensor.{}.{}", r.category, r.name), r.value);
         }
         ctx.snapshot.sensors = readings;
+
+        let batteries = platform::read_batteries();
+        for b in &batteries {
+            ctx.snapshot
+                .set(format!("battery.{}.percent", b.name), b.percent);
+            if let Some(m) = b.time_remaining_minutes {
+                ctx.snapshot
+                    .set(format!("battery.{}.minutes", b.name), m as f64);
+            }
+        }
+        ctx.snapshot.batteries = batteries;
         Ok(())
     }
 }

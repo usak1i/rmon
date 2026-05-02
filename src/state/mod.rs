@@ -2,7 +2,10 @@ mod history;
 mod snapshot;
 
 pub use history::History;
-pub use snapshot::{DiskSnapshot, NetworkSnapshot, ProcessSnapshot, SensorReading, Snapshot};
+pub use snapshot::{
+    BatteryReading, BatteryStatus, DiskSnapshot, NetworkSnapshot, ProcessSnapshot, SensorReading,
+    Snapshot,
+};
 
 use std::sync::{Arc, RwLock};
 

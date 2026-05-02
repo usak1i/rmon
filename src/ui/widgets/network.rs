@@ -26,7 +26,18 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, view: &StateView, theme: &Theme
         return;
     };
 
-    let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
+    // Optional 1-line conn footer (Linux only).
+    let has_conns = snap.get("net.conn.tcp_established").is_some();
+    let chunks = if has_conns {
+        Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(inner)
+    } else {
+        Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner)
+    };
 
     let total_rx = snap.get("net.total.rx_bps").unwrap_or(0.0);
     let total_tx = snap.get("net.total.tx_bps").unwrap_or(0.0);
@@ -84,6 +95,24 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, view: &StateView, theme: &Theme
     ];
     let table = Table::new(rows, widths).header(header).column_spacing(1);
     frame.render_widget(table, chunks[1]);
+
+    if has_conns {
+        let est = snap.get("net.conn.tcp_established").unwrap_or(0.0) as u32;
+        let lis = snap.get("net.conn.tcp_listen").unwrap_or(0.0) as u32;
+        let tw = snap.get("net.conn.tcp_time_wait").unwrap_or(0.0) as u32;
+        let udp = snap.get("net.conn.udp").unwrap_or(0.0) as u32;
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled("TCP ", theme.dim_style()),
+            Span::raw(format!("{est} estab")),
+            Span::styled(" · ", theme.dim_style()),
+            Span::raw(format!("{lis} listen")),
+            Span::styled(" · ", theme.dim_style()),
+            Span::raw(format!("{tw} wait")),
+            Span::styled("    UDP ", theme.dim_style()),
+            Span::raw(format!("{udp}")),
+        ]));
+        frame.render_widget(footer, chunks[2]);
+    }
 }
 
 fn combined_history(view: &StateView) -> Vec<u64> {

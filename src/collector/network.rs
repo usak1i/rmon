@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use super::connections;
 use super::{CollectCtx, Collector};
 use crate::state::NetworkSnapshot;
 
@@ -72,6 +73,19 @@ impl Collector for NetworkCollector {
 
         ctx.snapshot.set("net.total.rx_bps", total_rx);
         ctx.snapshot.set("net.total.tx_bps", total_tx);
+
+        // Linux-only on the read side; on macOS this returns zeros and we
+        // skip emitting anything so the widget hides the conn line.
+        let conns = connections::read_counts();
+        if conns.tcp_established + conns.tcp_listen + conns.tcp_time_wait + conns.udp > 0 {
+            ctx.snapshot
+                .set("net.conn.tcp_established", conns.tcp_established as f64);
+            ctx.snapshot
+                .set("net.conn.tcp_listen", conns.tcp_listen as f64);
+            ctx.snapshot
+                .set("net.conn.tcp_time_wait", conns.tcp_time_wait as f64);
+            ctx.snapshot.set("net.conn.udp", conns.udp as f64);
+        }
         Ok(())
     }
 }

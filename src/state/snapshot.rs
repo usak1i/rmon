@@ -48,15 +48,48 @@ pub struct NetworkSnapshot {
 }
 
 /// Generic key-value sensor reading. `category` groups readings in the UI
-/// (`temp`, `fan`, `battery`); `name` is the human label; `unit` is appended
-/// for display. Numeric value is also pushed into the `Snapshot::numeric`
-/// map under `sensor.<category>.<name>` so it can drive sparklines later.
+/// (`temp`, `fan`); `name` is the human label; `unit` is appended for
+/// display. Numeric value is also pushed into the `Snapshot::numeric` map
+/// under `sensor.<category>.<name>` so it can drive sparklines later.
+///
+/// Battery is *not* a category here — it gets its own richer
+/// `BatteryReading` since percentage alone is too coarse.
 #[derive(Debug, Clone)]
 pub struct SensorReading {
     pub category: String,
     pub name: String,
     pub value: f64,
     pub unit: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryStatus {
+    Charging,
+    Discharging,
+    Full,
+    Unknown,
+}
+
+impl BatteryStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            BatteryStatus::Charging => "charging",
+            BatteryStatus::Discharging => "discharging",
+            BatteryStatus::Full => "full",
+            BatteryStatus::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BatteryReading {
+    pub name: String,
+    pub percent: f64,
+    pub status: BatteryStatus,
+    /// Estimated minutes until empty (when discharging) or full (when
+    /// charging). `None` when the system can't estimate (just plugged in,
+    /// already full, etc.).
+    pub time_remaining_minutes: Option<u32>,
 }
 
 /// One sampling round's worth of data, accumulated by the registry.
@@ -69,6 +102,7 @@ pub struct Snapshot {
     pub disks: Vec<DiskSnapshot>,
     pub networks: Vec<NetworkSnapshot>,
     pub sensors: Vec<SensorReading>,
+    pub batteries: Vec<BatteryReading>,
 }
 
 impl Snapshot {
@@ -79,6 +113,7 @@ impl Snapshot {
             disks: Vec::new(),
             networks: Vec::new(),
             sensors: Vec::new(),
+            batteries: Vec::new(),
         }
     }
 
