@@ -12,6 +12,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - `[x]` Phase 2 — Network (per-interface RX/TX + total sparkline, loopback hidden) + Sensors (battery on both platforms; Linux hwmon temp/fan; macOS thermal deferred), six-panel layout
 - `[x]` Phase 3 — Apple Silicon GPU via `sudo powermetrics` (opt-in `--gpu` flag, sudo pre-auth before TUI, dedicated reader thread, hand-rolled parser, conditional 7-panel layout)
 - `[x]` Phase 4 v1 — Container panel via `docker stats` subprocess in a dedicated poller thread (2s cache), eight-panel layout (Disk and Container share the disk row)
+- `[x]` Phase 4.5 — Linux cgroup PID grouping (`/proc/<pid>/cgroup` parser handling cgroup v1, v2 systemd-style docker / cri-containerd), Process panel `g` toggle that renders container header rows + indented children + a final `system` bucket for unattributed PIDs
 
 ---
 
@@ -58,17 +59,15 @@ Path A (sudo + powermetrics) is shipped. Remaining items:
 
 ---
 
-## Phase 4.5 — Container carryovers
+## Phase 4 carryovers (post-4.5)
 
-Phase 4 v1 ships the docker-CLI poller path. Remaining items from the
-original plan:
-
-- [ ] **Linux cgroup PID grouping**: parse `/proc/<pid>/cgroup`, extract
-  `docker/...` and `kubepods/.../pod<uuid>` IDs. Lets us group processes
-  by container without depending on the docker daemon.
-- [ ] **Process panel grouped/flat toggle** (key `C`?): when grouped,
-  render processes as a forest indented under their container ID;
-  unattributed processes go in a `system` bucket at the top.
+- [x] **Linux cgroup PID grouping**: cgroup v1 + v2 systemd-style docker /
+  cri-containerd parsing, six unit tests. PID→container_id cache in
+  ProcessCollector to avoid re-reading `/proc/<pid>/cgroup` per tick.
+- [x] **Process panel grouped/flat toggle** (`g`): container header rows
+  with aggregate CPU/MEM, indented children, `system` bucket for
+  unattributed PIDs. Header rows are non-PID (kill on a header is a
+  no-op).
 - [ ] **bollard upgrade**: replace the docker CLI subprocess with a real
   Docker API client. Cleaner streaming model, faster, types instead of
   string parsing. Cost: pulls in `tokio` for async runtime — defer until
@@ -79,7 +78,8 @@ original plan:
   unified data.
 - [ ] **Container detail keybinding**: `i` → expand selected container
   with logs tail or env / labels; `K` → `docker stop <id>` with
-  confirmation. Needs the `id` field re-added to `ContainerSnapshot`.
+  confirmation; `Enter` on a container header in grouped mode could
+  scope the kill to the whole container.
 
 ---
 

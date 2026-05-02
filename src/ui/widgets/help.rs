@@ -21,6 +21,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         ("Tab", "cycle focus between panels"),
         ("↑ / ↓", "select row in Process panel"),
         ("c / m / p / n", "sort processes by CPU / Mem / PID / Name"),
+        ("g", "toggle grouped (by container) / flat process view"),
         ("/", "filter processes (Esc to cancel)"),
         ("F9 / k", "ask to kill selected process; Enter to confirm"),
         ("?", "toggle this help"),

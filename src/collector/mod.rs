@@ -1,3 +1,4 @@
+mod cgroup;
 mod connections;
 mod container;
 mod cpu;

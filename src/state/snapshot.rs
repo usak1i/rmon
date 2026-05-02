@@ -24,6 +24,11 @@ pub struct ProcessSnapshot {
     pub command: String,
     pub status: char,
     pub run_time_secs: u64,
+    /// Long (64-hex) container ID from `/proc/<pid>/cgroup`, or `None` for
+    /// processes not in a container. Linux-only; other platforms always
+    /// return `None`. Match against `ContainerSnapshot::id` (12-char short
+    /// ID) via `starts_with`.
+    pub container_id: Option<String>,
 }
 
 /// Point-in-time mount/volume entry. IO throughput per disk is deferred to
@@ -94,11 +99,12 @@ pub struct BatteryReading {
 
 /// Per-container snapshot from `docker stats`. Names map to docker's
 /// `stats --format` keys; we copy them into typed numbers so the widget
-/// doesn't have to re-parse strings each frame. (Container ID is dropped
-/// here — re-add when a feature like "kill container" needs to address
-/// it unambiguously.)
+/// doesn't have to re-parse strings each frame. `id` is the 12-char
+/// short ID from docker, which is a prefix of the long ID we'd find in
+/// `/proc/<pid>/cgroup` (so process→container matching is `starts_with`).
 #[derive(Debug, Clone)]
 pub struct ContainerSnapshot {
+    pub id: String,
     pub name: String,
     pub cpu_percent: f64,
     pub mem_bytes: u64,

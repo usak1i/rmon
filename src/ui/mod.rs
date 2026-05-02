@@ -90,7 +90,7 @@ pub fn render(frame: &mut Frame<'_>, state: &SharedState, ui: &mut UiState, them
     } else if let Some(pid) = ui.kill_pending {
         format!("kill PID {pid}? (Enter=SIGTERM, Esc=cancel)")
     } else {
-        "q quit  Tab focus  ↑↓ select  c/m/p/n sort  / search  F9 kill  ? help".to_string()
+        "q quit  Tab focus  ↑↓ select  c/m/p/n sort  g group  / search  F9 kill  ? help".to_string()
     };
     let footer = Paragraph::new(footer_text).style(theme.dim_style());
     frame.render_widget(footer, chunks[5]);

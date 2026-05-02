@@ -52,10 +52,14 @@ pub struct UiState {
     pub kill_pending: Option<u32>,
     pub show_help: bool,
     pub gpu_enabled: bool,
+    /// When true, the Process panel groups rows by container (header row +
+    /// indented children, with a final `system` bucket for unattributed PIDs).
+    pub grouped_mode: bool,
     /// PIDs of the rows currently visible in the process table, in display
-    /// order. Refreshed each frame by the process widget so key handlers can
-    /// translate `selected()` → PID without re-sorting.
-    pub last_visible_pids: Vec<u32>,
+    /// order. `None` for non-process rows (container/system headers in
+    /// grouped mode). Refreshed each frame by the process widget so key
+    /// handlers can translate `selected()` → PID without re-sorting.
+    pub last_visible_pids: Vec<Option<u32>>,
 }
 
 impl UiState {
@@ -71,6 +75,7 @@ impl UiState {
             kill_pending: None,
             show_help: false,
             gpu_enabled,
+            grouped_mode: false,
             last_visible_pids: Vec::new(),
         }
     }
@@ -78,7 +83,7 @@ impl UiState {
     pub fn selected_pid(&self) -> Option<u32> {
         self.process_table
             .selected()
-            .and_then(|i| self.last_visible_pids.get(i).copied())
+            .and_then(|i| self.last_visible_pids.get(i).copied().flatten())
     }
 }
 

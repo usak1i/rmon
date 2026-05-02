@@ -158,6 +158,9 @@ impl App {
                 self.ui.editing_search = true;
                 self.ui.search.get_or_insert_with(String::new);
             }
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                self.ui.grouped_mode = !self.ui.grouped_mode;
+            }
             (KeyCode::F(9), _) | (KeyCode::Char('k'), KeyModifiers::NONE) => {
                 if let Some(pid) = self.ui.selected_pid() {
                     self.ui.kill_pending = Some(pid);

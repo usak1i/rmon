@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `resource-monitor` is a Rust TUI system monitor (htop-style) for **macOS + Linux**. It is being built in deliberate phases — see `/Users/han/.claude/plans/rust-htop-cpu-memory-disk-frolicking-meadow.md` for the full design plan and `TODO.md` in this repo for the active roadmap.
 
-**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout) · Phase 2.5/3 carryovers (battery status + time-remaining, Linux connection counts, GPU stale-data check, `setpgid` process-group containment for powermetrics) · Phase 4 (Container panel via `docker stats` subprocess in a dedicated poller thread, eight-panel layout).
+**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout) · Phase 2.5/3 carryovers (battery status + time-remaining, Linux connection counts, GPU stale-data check, `setpgid` process-group containment for powermetrics) · Phase 4 (Container panel via `docker stats` subprocess in a dedicated poller thread, eight-panel layout) · Phase 4.5 (Linux cgroup PID grouping, Process panel `g` toggle for grouped/flat view).
 
-**Next** (live in `TODO.md`): Phase 4.5 (cgroup PID grouping on Linux, Process panel flat/grouped toggle, optional bollard upgrade), macOS thermal/fan via IOReport, or Phase 5 (alert rules).
+**Next** (live in `TODO.md`): bollard upgrade (Docker API client, pulls in tokio), macOS thermal/fan via IOReport, or Phase 5 (alert rules).
 
 Differentiators planned beyond htop: historical sparkline charts, modern theme, container/cgroup awareness, alert rules, and a Prometheus `/metrics` exporter. Explicit non-goals: Windows, GUI/Web UI, multi-machine view, record/replay.
 

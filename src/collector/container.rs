@@ -157,6 +157,8 @@ fn query_docker() -> Result<Vec<ContainerSnapshot>> {
 
 #[derive(Deserialize)]
 struct DockerStatsRow<'a> {
+    #[serde(rename = "ID")]
+    id: &'a str,
     #[serde(rename = "Name")]
     name: &'a str,
     #[serde(rename = "CPUPerc")]
@@ -172,6 +174,7 @@ struct DockerStatsRow<'a> {
 fn parse_line(line: &str) -> Option<ContainerSnapshot> {
     let row: DockerStatsRow = serde_json::from_str(line).ok()?;
     Some(ContainerSnapshot {
+        id: row.id.to_string(),
         name: row.name.to_string(),
         cpu_percent: parse_percent(row.cpu_perc).unwrap_or(0.0),
         mem_bytes: split_first_bytes(row.mem_usage).unwrap_or(0),
@@ -261,6 +264,7 @@ mod tests {
     fn parse_line_full_row() {
         let raw = r#"{"BlockIO":"148kB / 0B","CPUPerc":"0.04%","Container":"a1b2c3","ID":"a1b2c3","MemPerc":"0.31%","MemUsage":"49.7MiB / 15.6GiB","Name":"my-svc","NetIO":"4.8kB / 0B","PIDs":"5"}"#;
         let c = parse_line(raw).unwrap();
+        assert_eq!(c.id, "a1b2c3");
         assert_eq!(c.name, "my-svc");
         assert!((c.cpu_percent - 0.04).abs() < 1e-9);
         assert_eq!(c.mem_bytes, (49.7 * 1024.0 * 1024.0) as u64);
