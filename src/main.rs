@@ -1,3 +1,4 @@
+mod alert;
 mod app;
 mod collector;
 mod config;
@@ -42,13 +43,22 @@ fn main() -> Result<()> {
     init_tracing(cli.debug)?;
 
     let config = Config::load(cli.config.as_deref()).context("failed to load config")?;
-    tracing::info!(?config, "loaded config");
+    let alert_rules = config
+        .alert_rules()
+        .context("validating alert rules in config")?;
+    tracing::info!(
+        sample_interval_ms = config.sample_interval_ms,
+        history_capacity = config.history_capacity,
+        ui_tick_ms = config.ui_tick_ms,
+        alert_count = alert_rules.len(),
+        "loaded config"
+    );
 
     let gpu_enabled = if cli.gpu { ensure_gpu_prereqs() } else { false };
 
     let state: SharedState = Arc::new(state::State::new(config.history_capacity));
 
-    let mut app = App::new(state, config, gpu_enabled);
+    let mut app = App::new(state, config, gpu_enabled, alert_rules);
     app.run()
 }
 

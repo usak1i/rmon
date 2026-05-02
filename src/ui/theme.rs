@@ -54,6 +54,19 @@ impl Theme {
             self.border
         })
     }
+
+    /// Border for a panel that has at least one firing alert against one of
+    /// its metrics. Takes precedence over focus so a firing panel is
+    /// always visually distinct.
+    pub fn border_style_for(&self, focused: bool, firing: bool) -> Style {
+        if firing {
+            Style::default()
+                .fg(self.gauge_high)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            self.border_style(focused)
+        }
+    }
 }
 
 impl Default for Theme {

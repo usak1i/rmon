@@ -13,6 +13,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - `[x]` Phase 3 — Apple Silicon GPU via `sudo powermetrics` (opt-in `--gpu` flag, sudo pre-auth before TUI, dedicated reader thread, hand-rolled parser, conditional 7-panel layout)
 - `[x]` Phase 4 v1 — Container panel via `docker stats` subprocess in a dedicated poller thread (2s cache), eight-panel layout (Disk and Container share the disk row)
 - `[x]` Phase 4.5 — Linux cgroup PID grouping (`/proc/<pid>/cgroup` parser handling cgroup v1, v2 systemd-style docker / cri-containerd), Process panel `g` toggle that renders container header rows + indented children + a final `system` bucket for unattributed PIDs
+- `[x]` Phase 5 — TOML alert rules (`[[alert]]` blocks with `op` ∈ `> < >= <=`, `duration`, `severity`); evaluator with breach-since tracking, firing transitions tint panel borders + ring the terminal bell + log via tracing, `a` key opens an overlay listing currently-firing + last 50 transitions
 
 ---
 
@@ -83,22 +84,20 @@ Path A (sudo + powermetrics) is shipped. Remaining items:
 
 ---
 
-## Phase 5 — Alerts
+## Phase 5 — Alerts (carryovers)
 
-- [ ] TOML rule schema:
-  ```toml
-  [[alert]]
-  name = "cpu hot"
-  metric = "cpu.total"
-  op = ">"
-  value = 90.0
-  duration = "30s"
-  severity = "warn"
-  ```
-- [ ] Evaluator runs after each sample; tracks per-rule "in-breach since" timestamp; fires when breach exceeds `duration`
-- [ ] UI: highlight the relevant panel border, optional terminal bell, write to log
-- [ ] `a` key opens an alert overlay (active + recently fired, with dismiss)
-- [ ] Validate config on startup; surface bad rules with file:line in error output
+Phase 5 v1 ships rule definition + evaluator + UI integration. Outstanding:
+
+- [ ] **Alert dismiss**: a way to acknowledge a firing alert so it stops
+  tinting the panel border without clearing on its own. Needs persistent
+  per-event state in `StateInner`.
+- [ ] **Bell quiet config**: some users hate the BEL. Add `bell = false`
+  knob to `[alert]` global section (or per-rule).
+- [ ] **Severity colour customisation**: theme override for the firing
+  border so users can pick yellow vs red themselves.
+- [ ] **Word-form ops**: accept `gt` / `ge` / `lt` / `le` in addition to
+  symbols, since YAML/TOML reviewers sometimes find symbols look like
+  comparison operators in the doc itself.
 
 ---
 

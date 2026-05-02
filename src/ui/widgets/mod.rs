@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod container;
 pub mod cpu;
 pub mod disk;

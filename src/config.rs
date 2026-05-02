@@ -3,9 +3,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use crate::alert::{AlertRule, AlertRuleRaw};
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Sampling period in milliseconds.
@@ -16,6 +18,12 @@ pub struct Config {
 
     /// UI redraw period in milliseconds.
     pub ui_tick_ms: u64,
+
+    /// Alert rules in raw TOML form. Convert to validated `AlertRule`s
+    /// via `Config::alert_rules` on startup so config errors surface
+    /// before we enter the TUI.
+    #[serde(rename = "alert", default)]
+    pub alerts_raw: Vec<AlertRuleRaw>,
 }
 
 impl Default for Config {
@@ -24,6 +32,7 @@ impl Default for Config {
             sample_interval_ms: 1000,
             history_capacity: 600,
             ui_tick_ms: 100,
+            alerts_raw: Vec::new(),
         }
     }
 }
@@ -35,6 +44,17 @@ impl Config {
 
     pub fn ui_tick(&self) -> Duration {
         Duration::from_millis(self.ui_tick_ms)
+    }
+
+    /// Convert the raw TOML alert blocks into validated rules. Reports the
+    /// first error with the rule's `name` so the user can find the bad
+    /// block in their config.
+    pub fn alert_rules(&self) -> Result<Vec<AlertRule>> {
+        self.alerts_raw
+            .iter()
+            .cloned()
+            .map(AlertRule::try_from)
+            .collect()
     }
 
     /// Load config from `override_path` if provided, otherwise from the XDG path.

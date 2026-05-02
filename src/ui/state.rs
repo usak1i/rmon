@@ -1,7 +1,7 @@
 use ratatui::widgets::TableState;
 
 /// Which panel currently has keyboard focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Panel {
     Cpu,
     Memory,
@@ -11,6 +11,32 @@ pub enum Panel {
     Disk,
     Container,
     Process,
+}
+
+/// Map a `Snapshot::numeric` key prefix to the panel that surfaces it.
+/// Used by alert highlighting so a firing rule against `cpu.total` tints
+/// the CPU panel border. Returns `None` for keys that aren't tied to a
+/// specific panel (e.g. derived aggregates).
+pub fn panel_for_metric(key: &str) -> Option<Panel> {
+    if key.starts_with("cpu.") {
+        Some(Panel::Cpu)
+    } else if key.starts_with("mem.") {
+        Some(Panel::Memory)
+    } else if key.starts_with("gpu.") {
+        Some(Panel::Gpu)
+    } else if key.starts_with("net.") {
+        Some(Panel::Network)
+    } else if key.starts_with("sensor.") || key.starts_with("battery.") {
+        Some(Panel::Sensors)
+    } else if key.starts_with("disk.") {
+        Some(Panel::Disk)
+    } else if key.starts_with("container.") {
+        Some(Panel::Container)
+    } else if key.starts_with("process.") {
+        Some(Panel::Process)
+    } else {
+        None
+    }
 }
 
 impl Panel {
@@ -51,6 +77,7 @@ pub struct UiState {
     pub editing_search: bool,
     pub kill_pending: Option<u32>,
     pub show_help: bool,
+    pub show_alerts: bool,
     pub gpu_enabled: bool,
     /// When true, the Process panel groups rows by container (header row +
     /// indented children, with a final `system` bucket for unattributed PIDs).
@@ -74,6 +101,7 @@ impl UiState {
             editing_search: false,
             kill_pending: None,
             show_help: false,
+            show_alerts: false,
             gpu_enabled,
             grouped_mode: false,
             last_visible_pids: Vec::new(),

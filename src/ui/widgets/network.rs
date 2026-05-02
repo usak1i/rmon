@@ -13,10 +13,17 @@ use crate::ui::theme::Theme;
 /// shows the exact rate.
 const SPARK_CEILING_BPS: f64 = 100.0 * 1024.0 * 1024.0; // 100 MB/s
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, view: &StateView, theme: &Theme, focused: bool) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: &StateView,
+    theme: &Theme,
+    focused: bool,
+    firing: bool,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border_style(focused))
+        .border_style(theme.border_style_for(focused, firing))
         .title(Span::styled(" Network ", theme.title()));
     let inner = block.inner(area);
     frame.render_widget(block, area);

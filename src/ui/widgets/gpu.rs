@@ -8,10 +8,17 @@ use crate::state::StateView;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::series_to_u64;
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, view: &StateView, theme: &Theme, focused: bool) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: &StateView,
+    theme: &Theme,
+    focused: bool,
+    firing: bool,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border_style(focused))
+        .border_style(theme.border_style_for(focused, firing))
         .title(Span::styled(" GPU ", theme.title()));
     let inner = block.inner(area);
     frame.render_widget(block, area);

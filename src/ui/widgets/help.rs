@@ -24,6 +24,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         ("g", "toggle grouped (by container) / flat process view"),
         ("/", "filter processes (Esc to cancel)"),
         ("F9 / k", "ask to kill selected process; Enter to confirm"),
+        ("a", "toggle alerts overlay (firing + recent transitions)"),
         ("?", "toggle this help"),
         ("q / Ctrl-C", "quit"),
     ];

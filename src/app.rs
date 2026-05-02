@@ -14,6 +14,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use crate::alert::{AlertEvaluator, AlertEventKind, AlertRule, AlertSeverity};
 use crate::collector::{
     ContainerCollector, CpuCollector, DiskCollector, MemoryCollector, NetworkCollector,
     ProcessCollector, Registry, SensorsCollector, SystemSource,
@@ -32,16 +33,23 @@ pub struct App {
     ui: UiState,
     theme: Theme,
     gpu_enabled: bool,
+    alert_rules: Vec<AlertRule>,
 }
 
 impl App {
-    pub fn new(state: SharedState, config: Config, gpu_enabled: bool) -> Self {
+    pub fn new(
+        state: SharedState,
+        config: Config,
+        gpu_enabled: bool,
+        alert_rules: Vec<AlertRule>,
+    ) -> Self {
         Self {
             state,
             config,
             ui: UiState::new(gpu_enabled),
             theme: Theme::dark(),
             gpu_enabled,
+            alert_rules,
         }
     }
 
@@ -54,6 +62,7 @@ impl App {
             self.state.clone(),
             self.config.clone(),
             self.gpu_enabled,
+            self.alert_rules.clone(),
             shutdown.clone(),
         );
 
@@ -143,8 +152,18 @@ impl App {
             (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                 return KeyOutcome::Quit;
             }
-            (KeyCode::Char('?'), _) => self.ui.show_help = !self.ui.show_help,
-            (KeyCode::Esc, _) => self.ui.show_help = false,
+            (KeyCode::Char('?'), _) => {
+                self.ui.show_help = !self.ui.show_help;
+                self.ui.show_alerts = false;
+            }
+            (KeyCode::Char('a'), KeyModifiers::NONE) => {
+                self.ui.show_alerts = !self.ui.show_alerts;
+                self.ui.show_help = false;
+            }
+            (KeyCode::Esc, _) => {
+                self.ui.show_help = false;
+                self.ui.show_alerts = false;
+            }
             (KeyCode::Tab, _) => self.ui.focus = self.ui.focus.next(self.gpu_enabled),
             (KeyCode::Up, _) => move_selection(&mut self.ui, -1),
             (KeyCode::Down, _) => move_selection(&mut self.ui, 1),
@@ -191,6 +210,46 @@ fn move_selection(ui: &mut UiState, delta: i32) {
     ui.process_table.select(Some(next));
 }
 
+fn log_event(ev: &crate::alert::AlertEvent) {
+    match (ev.kind, ev.severity) {
+        (AlertEventKind::Fired, AlertSeverity::Critical) => tracing::error!(
+            rule = %ev.rule_name,
+            metric = %ev.metric,
+            value = ev.value,
+            threshold = ev.threshold,
+            "alert FIRED (critical)"
+        ),
+        (AlertEventKind::Fired, AlertSeverity::Warn) => tracing::warn!(
+            rule = %ev.rule_name,
+            metric = %ev.metric,
+            value = ev.value,
+            threshold = ev.threshold,
+            "alert FIRED"
+        ),
+        (AlertEventKind::Fired, AlertSeverity::Info) => tracing::info!(
+            rule = %ev.rule_name,
+            metric = %ev.metric,
+            value = ev.value,
+            threshold = ev.threshold,
+            "alert FIRED (info)"
+        ),
+        (AlertEventKind::Recovered, _) => tracing::info!(
+            rule = %ev.rule_name,
+            metric = %ev.metric,
+            value = ev.value,
+            "alert recovered"
+        ),
+    }
+}
+
+fn ring_bell() {
+    use std::io::Write;
+    // BEL char to stderr; the alt-screen TUI doesn't intercept stderr,
+    // and most terminal emulators flash or beep on \x07.
+    let _ = std::io::stderr().write_all(b"\x07");
+    let _ = std::io::stderr().flush();
+}
+
 fn send_sigterm(pid: u32) -> Result<()> {
     // SAFETY: libc::kill is safe to call with any pid; it just returns -1 on
     // failure (e.g. ESRCH if the process is gone). pid is bounded by i32 since
@@ -232,15 +291,22 @@ fn spawn_sampler(
     state: SharedState,
     config: Config,
     gpu_enabled: bool,
+    alert_rules: Vec<AlertRule>,
     shutdown: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name("sampler".into())
-        .spawn(move || sampler_loop(state, config, gpu_enabled, shutdown))
+        .spawn(move || sampler_loop(state, config, gpu_enabled, alert_rules, shutdown))
         .expect("failed to spawn sampler thread")
 }
 
-fn sampler_loop(state: SharedState, config: Config, gpu_enabled: bool, shutdown: Arc<AtomicBool>) {
+fn sampler_loop(
+    state: SharedState,
+    config: Config,
+    gpu_enabled: bool,
+    alert_rules: Vec<AlertRule>,
+    shutdown: Arc<AtomicBool>,
+) {
     let mut system = SystemSource::new();
     let mut registry = Registry::new();
     registry.register(Box::new(CpuCollector::new()));
@@ -261,12 +327,25 @@ fn sampler_loop(state: SharedState, config: Config, gpu_enabled: bool, shutdown:
     #[cfg(not(target_os = "macos"))]
     let _ = gpu_enabled;
 
+    let mut evaluator = AlertEvaluator::new(alert_rules);
+
     let interval = config.sample_interval();
     while !shutdown.load(Ordering::SeqCst) {
         let started = Instant::now();
         let mut snapshot = Snapshot::new();
         registry.sample_all(&mut system, &mut snapshot);
-        state.commit(snapshot);
+
+        // Run alerts after collectors have populated this tick's snapshot;
+        // stamp firing set into the snapshot so the UI can colour borders.
+        let out = evaluator.evaluate(&snapshot, Instant::now());
+        for ev in &out.events {
+            log_event(ev);
+        }
+        if !out.events.is_empty() {
+            ring_bell();
+        }
+        snapshot.firing_alerts = out.firing_now;
+        state.commit(snapshot, out.events);
 
         let elapsed = started.elapsed();
         let sleep_for = interval.saturating_sub(elapsed);

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::alert::FiringAlert;
+
 /// Identifies a single time-series metric. String-based for flexibility
 /// (per-core CPU, per-disk IO, per-interface network throughput all need
 /// dynamic indexing).
@@ -125,6 +127,9 @@ pub struct Snapshot {
     pub sensors: Vec<SensorReading>,
     pub batteries: Vec<BatteryReading>,
     pub containers: Vec<ContainerSnapshot>,
+    /// Alerts currently in the firing state. Stamped by the sampler each
+    /// tick after running the evaluator.
+    pub firing_alerts: Vec<FiringAlert>,
 }
 
 impl Snapshot {
@@ -137,6 +142,7 @@ impl Snapshot {
             sensors: Vec::new(),
             batteries: Vec::new(),
             containers: Vec::new(),
+            firing_alerts: Vec::new(),
         }
     }
 

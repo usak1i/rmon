@@ -1,1 +1,4 @@
 /target
+
+# Per-session agent runtime state (agent-managed; not a project artifact).
+.claude/agent-memory/
