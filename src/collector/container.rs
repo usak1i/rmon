@@ -1,26 +1,27 @@
-//! Container stats via the `docker` CLI.
+//! Container stats via the Docker API (`bollard`).
 //!
-//! Phase 4 v1 deliberately avoids pulling in `bollard` + `tokio` just for
-//! the Docker API. We shell out to `docker stats --no-stream --format json`
-//! from a dedicated poller thread; the sampler reads cached results so the
-//! ~150ms docker call doesn't bottleneck the 1Hz tick.
-//!
-//! cgroup-based PID grouping (Linux) and a real Docker API client live in
-//! Phase 4.5 and beyond — see TODO.md.
+//! Phase 4.5 carryover: replaces the Phase 4 `docker stats` subprocess
+//! with a typed async client. Same shape on the consumer side — the
+//! sampler reads cached `Vec<ContainerSnapshot>` from a poller thread,
+//! so the rest of the app is unchanged. The poller thread now drives a
+//! current-thread tokio runtime so we can `await` bollard calls without
+//! introducing a global runtime.
 
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use bollard::Docker;
+use bollard::models::ContainerStatsResponse;
+use bollard::query_parameters::{ListContainersOptionsBuilder, StatsOptionsBuilder};
+use futures_util::StreamExt;
 
 use super::{CollectCtx, Collector};
 use crate::state::ContainerSnapshot;
 
-/// How often the poller hits `docker stats`. Fast enough that container
+/// How often the poller hits the Docker daemon. Fast enough that container
 /// changes show up within a couple of seconds, slow enough to keep the
 /// docker daemon load negligible.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -50,7 +51,7 @@ impl ContainerCollector {
         let sh = shutdown.clone();
         let handle = thread::Builder::new()
             .name("container-poller".into())
-            .spawn(move || poller_loop(s, sh))
+            .spawn(move || poller_thread(s, sh))
             .expect("spawn container poller");
         Self {
             state,
@@ -95,10 +96,37 @@ impl Drop for ContainerCollector {
     }
 }
 
-fn poller_loop(state: Arc<Mutex<PollerState>>, shutdown: Arc<AtomicBool>) {
+/// The poller thread builds a current-thread tokio runtime, then loops
+/// blocking on `poll_once` until shutdown.
+fn poller_thread(state: Arc<Mutex<PollerState>>, shutdown: Arc<AtomicBool>) {
+    // Be explicit about the features we need so we're not load-bearing on
+    // bollard/hyper transitively unifying tokio features:
+    //   net  — bollard talks to /var/run/docker.sock
+    //   io   — implicit via net; hyper drives request bodies
+    //   time — internal timeouts in hyper / bollard
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "container poller: tokio runtime build failed");
+            return;
+        }
+    };
+
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::debug!(error = %e, "docker connect failed; container panel disabled");
+            return;
+        }
+    };
+
     while !shutdown.load(Ordering::SeqCst) {
         let started = Instant::now();
-        match query_docker() {
+        match runtime.block_on(poll_once(&docker)) {
             Ok(containers) => {
                 let mut s = state.lock().expect("container state poisoned");
                 s.containers = containers;
@@ -106,7 +134,7 @@ fn poller_loop(state: Arc<Mutex<PollerState>>, shutdown: Arc<AtomicBool>) {
                 s.last_update = Some(Instant::now());
             }
             Err(e) => {
-                tracing::debug!(error = %e, "docker stats query failed");
+                tracing::debug!(error = %e, "docker poll failed");
                 let mut s = state.lock().expect("container state poisoned");
                 s.available = false;
                 s.containers.clear();
@@ -132,94 +160,133 @@ fn sleep_chunked(total: Duration, shutdown: &AtomicBool) {
     }
 }
 
-fn query_docker() -> Result<Vec<ContainerSnapshot>> {
-    let output = Command::new("docker")
-        .args(["stats", "--no-stream", "--format", "{{json .}}"])
-        .output()
-        .context("running `docker stats`")?;
-    if !output.status.success() {
-        anyhow::bail!("docker stats exited {:?}", output.status.code());
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut out = Vec::new();
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+/// One poll cycle: list running containers and fetch a one-shot stats
+/// snapshot for each. `stream: false` makes the stats stream emit a single
+/// item then complete.
+async fn poll_once(docker: &Docker) -> Result<Vec<ContainerSnapshot>> {
+    let opts = ListContainersOptionsBuilder::default().all(false).build();
+    let containers = docker
+        .list_containers(Some(opts))
+        .await
+        .context("list_containers")?;
+
+    let mut out = Vec::with_capacity(containers.len());
+    for c in containers {
+        let Some(full_id) = c.id.clone() else {
             continue;
-        }
-        match parse_line(line) {
-            Some(c) => out.push(c),
-            None => tracing::debug!(line = %line, "unparseable docker line"),
-        }
+        };
+        let name = c
+            .names
+            .as_ref()
+            .and_then(|n| n.first().cloned())
+            .map(|n| n.trim_start_matches('/').to_string())
+            .unwrap_or_else(|| full_id.chars().take(12).collect());
+
+        let stats_opts = StatsOptionsBuilder::default().stream(false).build();
+        let mut stream = docker.stats(&full_id, Some(stats_opts));
+        let stats = match stream.next().await {
+            Some(Ok(s)) => s,
+            Some(Err(e)) => {
+                tracing::debug!(id = %full_id, error = %e, "stats fetch failed");
+                continue;
+            }
+            None => continue,
+        };
+
+        out.push(snapshot_from_stats(&full_id, &name, &stats));
     }
     Ok(out)
 }
 
-#[derive(Deserialize)]
-struct DockerStatsRow<'a> {
-    #[serde(rename = "ID")]
-    id: &'a str,
-    #[serde(rename = "Name")]
-    name: &'a str,
-    #[serde(rename = "CPUPerc")]
-    cpu_perc: &'a str,
-    #[serde(rename = "MemUsage")]
-    mem_usage: &'a str,
-    #[serde(rename = "MemPerc")]
-    mem_perc: &'a str,
-    #[serde(rename = "NetIO")]
-    net_io: &'a str,
-}
-
-fn parse_line(line: &str) -> Option<ContainerSnapshot> {
-    let row: DockerStatsRow = serde_json::from_str(line).ok()?;
-    Some(ContainerSnapshot {
-        id: row.id.to_string(),
-        name: row.name.to_string(),
-        cpu_percent: parse_percent(row.cpu_perc).unwrap_or(0.0),
-        mem_bytes: split_first_bytes(row.mem_usage).unwrap_or(0),
-        mem_percent: parse_percent(row.mem_perc).unwrap_or(0.0),
-        net_rx_bytes: split_first_bytes(row.net_io).unwrap_or(0),
-        net_tx_bytes: split_second_bytes(row.net_io).unwrap_or(0),
-    })
-}
-
-fn parse_percent(s: &str) -> Option<f64> {
-    s.trim().trim_end_matches('%').parse().ok()
-}
-
-/// "49.7MiB / 15.6GiB" → 49.7MiB
-fn split_first_bytes(s: &str) -> Option<u64> {
-    let first = s.split('/').next()?;
-    parse_bytes(first.trim())
-}
-
-/// "49.7MiB / 15.6GiB" → 15.6GiB
-fn split_second_bytes(s: &str) -> Option<u64> {
-    let mut parts = s.split('/');
-    parts.next()?;
-    parse_bytes(parts.next()?.trim())
-}
-
-/// Parse a string like `49.7MiB`, `1.2GB`, `512B` into bytes.
-fn parse_bytes(s: &str) -> Option<u64> {
-    let s = s.trim();
-    let split = s.find(|c: char| c.is_ascii_alphabetic())?;
-    let (num_part, unit) = s.split_at(split);
-    let num: f64 = num_part.parse().ok()?;
-    let mult = match unit {
-        "B" => 1.0,
-        "kB" => 1_000.0,
-        "MB" => 1_000_000.0,
-        "GB" => 1_000_000_000.0,
-        "TB" => 1e12,
-        "KiB" => 1024.0,
-        "MiB" => 1024.0_f64.powi(2),
-        "GiB" => 1024.0_f64.powi(3),
-        "TiB" => 1024.0_f64.powi(4),
-        _ => return None,
+/// Compute the same numbers `docker stats` shows, from one bollard sample.
+fn snapshot_from_stats(
+    full_id: &str,
+    name: &str,
+    stats: &ContainerStatsResponse,
+) -> ContainerSnapshot {
+    let cpu_percent = compute_cpu_percent(stats);
+    let mem_bytes = stats
+        .memory_stats
+        .as_ref()
+        .and_then(|m| m.usage)
+        .unwrap_or(0);
+    let mem_limit = stats
+        .memory_stats
+        .as_ref()
+        .and_then(|m| m.limit)
+        .unwrap_or(0);
+    let mem_percent = if mem_limit > 0 {
+        (mem_bytes as f64 / mem_limit as f64) * 100.0
+    } else {
+        0.0
     };
-    Some((num * mult) as u64)
+    let (rx, tx) = stats
+        .networks
+        .as_ref()
+        .map(|m| {
+            m.values().fold((0u64, 0u64), |(rx, tx), n| {
+                (rx + n.rx_bytes.unwrap_or(0), tx + n.tx_bytes.unwrap_or(0))
+            })
+        })
+        .unwrap_or((0, 0));
+
+    ContainerSnapshot {
+        id: full_id.chars().take(12).collect(),
+        name: name.to_string(),
+        cpu_percent,
+        mem_bytes,
+        mem_percent,
+        net_rx_bytes: rx,
+        net_tx_bytes: tx,
+    }
+}
+
+/// Standard `docker stats` CPU% formula:
+/// `(cpu_delta / system_delta) * online_cpus * 100`. Returns 0.0 if either
+/// delta is missing or zero (very first sample on a container).
+fn compute_cpu_percent(stats: &ContainerStatsResponse) -> f64 {
+    let cpu = match &stats.cpu_stats {
+        Some(c) => c,
+        None => return 0.0,
+    };
+    let pre = match &stats.precpu_stats {
+        Some(p) => p,
+        None => return 0.0,
+    };
+    let cpu_total = cpu
+        .cpu_usage
+        .as_ref()
+        .and_then(|u| u.total_usage)
+        .unwrap_or(0);
+    let pre_total = pre
+        .cpu_usage
+        .as_ref()
+        .and_then(|u| u.total_usage)
+        .unwrap_or(0);
+    let sys = cpu.system_cpu_usage.unwrap_or(0);
+    let pre_sys = pre.system_cpu_usage.unwrap_or(0);
+
+    let cpu_delta = cpu_total.saturating_sub(pre_total) as f64;
+    let sys_delta = sys.saturating_sub(pre_sys) as f64;
+    let online_cpus_raw = cpu
+        .online_cpus
+        .map(|n| n as usize)
+        .or_else(|| {
+            cpu.cpu_usage
+                .as_ref()
+                .and_then(|u| u.percpu_usage.as_ref().map(|v| v.len()))
+        })
+        .unwrap_or(1);
+    cpu_percent_from_deltas(cpu_delta, sys_delta, online_cpus_raw as f64)
+}
+
+/// Pure-math separation so the formula is unit-testable without building
+/// the full bollard `ContainerStatsResponse` shape.
+fn cpu_percent_from_deltas(cpu_delta: f64, sys_delta: f64, online_cpus: f64) -> f64 {
+    if sys_delta <= 0.0 || cpu_delta <= 0.0 {
+        return 0.0;
+    }
+    (cpu_delta / sys_delta) * online_cpus * 100.0
 }
 
 #[cfg(test)]
@@ -227,54 +294,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_percent_strips_suffix() {
-        assert_eq!(parse_percent("0.04%"), Some(0.04));
-        assert_eq!(parse_percent("100%"), Some(100.0));
-        assert_eq!(parse_percent(" 12.5% "), Some(12.5));
-        assert_eq!(parse_percent("nope"), None);
+    fn cpu_percent_zero_when_either_delta_zero() {
+        assert_eq!(cpu_percent_from_deltas(0.0, 1000.0, 4.0), 0.0);
+        assert_eq!(cpu_percent_from_deltas(100.0, 0.0, 4.0), 0.0);
     }
 
     #[test]
-    fn parse_bytes_units() {
-        assert_eq!(parse_bytes("512B"), Some(512));
-        assert_eq!(parse_bytes("1kB"), Some(1_000));
-        assert_eq!(parse_bytes("1MiB"), Some(1024 * 1024));
-        assert_eq!(
-            parse_bytes("1.5GiB"),
-            Some((1.5 * 1024.0 * 1024.0 * 1024.0) as u64)
-        );
-        assert_eq!(parse_bytes("garbage"), None);
-        assert_eq!(parse_bytes("1.2ZB"), None);
+    fn cpu_percent_zero_when_negative_deltas() {
+        // saturating_sub upstream forces these to 0 in real data, but the
+        // pure fn should still bottom out cleanly if called directly.
+        assert_eq!(cpu_percent_from_deltas(-1.0, 1000.0, 4.0), 0.0);
+        assert_eq!(cpu_percent_from_deltas(100.0, -1.0, 4.0), 0.0);
     }
 
     #[test]
-    fn split_first_bytes_takes_lhs_of_slash() {
-        assert_eq!(
-            split_first_bytes("49.7MiB / 15.6GiB"),
-            Some((49.7 * 1024.0 * 1024.0) as u64)
-        );
-    }
-
-    #[test]
-    fn split_second_bytes_takes_rhs_of_slash() {
-        assert_eq!(split_second_bytes("4.8kB / 0B"), Some(0));
-    }
-
-    #[test]
-    fn parse_line_full_row() {
-        let raw = r#"{"BlockIO":"148kB / 0B","CPUPerc":"0.04%","Container":"a1b2c3","ID":"a1b2c3","MemPerc":"0.31%","MemUsage":"49.7MiB / 15.6GiB","Name":"my-svc","NetIO":"4.8kB / 0B","PIDs":"5"}"#;
-        let c = parse_line(raw).unwrap();
-        assert_eq!(c.id, "a1b2c3");
-        assert_eq!(c.name, "my-svc");
-        assert!((c.cpu_percent - 0.04).abs() < 1e-9);
-        assert_eq!(c.mem_bytes, (49.7 * 1024.0 * 1024.0) as u64);
-        assert!((c.mem_percent - 0.31).abs() < 1e-9);
-        assert_eq!(c.net_rx_bytes, 4_800);
-        assert_eq!(c.net_tx_bytes, 0);
-    }
-
-    #[test]
-    fn parse_line_rejects_garbage() {
-        assert!(parse_line("not json").is_none());
+    fn cpu_percent_classic_formula() {
+        // 10% of one core × 4 cores = 40%
+        assert_eq!(cpu_percent_from_deltas(100.0, 1000.0, 4.0), 40.0);
+        // single-core fully busy
+        assert_eq!(cpu_percent_from_deltas(1000.0, 1000.0, 1.0), 100.0);
     }
 }

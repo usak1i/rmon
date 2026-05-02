@@ -14,6 +14,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - `[x]` Phase 4 v1 — Container panel via `docker stats` subprocess in a dedicated poller thread (2s cache), eight-panel layout (Disk and Container share the disk row)
 - `[x]` Phase 4.5 — Linux cgroup PID grouping (`/proc/<pid>/cgroup` parser handling cgroup v1, v2 systemd-style docker / cri-containerd), Process panel `g` toggle that renders container header rows + indented children + a final `system` bucket for unattributed PIDs
 - `[x]` Phase 5 — TOML alert rules (`[[alert]]` blocks with `op` ∈ `> < >= <=`, `duration`, `severity`); evaluator with breach-since tracking, firing transitions tint panel borders + ring the terminal bell + log via tracing, `a` key opens an overlay listing currently-firing + last 50 transitions
+- `[x]` Bollard upgrade — replaced the docker CLI subprocess with bollard 0.20 driven by a current-thread tokio runtime on the `container-poller` thread. Pulls in tokio (`net`/`rt`/`time` only) so Phase 6 Prometheus exporter can reuse it. Pure CPU% formula extracted as testable fn.
 
 ---
 
@@ -69,11 +70,10 @@ Path A (sudo + powermetrics) is shipped. Remaining items:
   with aggregate CPU/MEM, indented children, `system` bucket for
   unattributed PIDs. Header rows are non-PID (kill on a header is a
   no-op).
-- [ ] **bollard upgrade**: replace the docker CLI subprocess with a real
-  Docker API client. Cleaner streaming model, faster, types instead of
-  string parsing. Cost: pulls in `tokio` for async runtime — defer until
-  Phase 6 (Prometheus exporter) needs tokio anyway, so the marginal
-  cost is zero.
+- [x] **bollard upgrade**: replaced the docker CLI subprocess with
+  bollard 0.20 + a current-thread tokio runtime on the existing poller
+  thread. Pure CPU% formula extracted to `cpu_percent_from_deltas` with
+  3 unit tests. Same `Vec<ContainerSnapshot>` interface; no UI changes.
 - [ ] **Image / status / pids columns**: `docker stats` doesn't emit
   these; either add a parallel `docker ps` call or move to bollard for
   unified data.

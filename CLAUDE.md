@@ -65,7 +65,7 @@ Exit code 0 + alt-screen entry/exit (`?1049h` / `?1049l`) in the log means termi
 1. **Sampler thread** (`app::sampler_loop`) — runs every `config.sample_interval_ms` (default 1000ms). Calls `SystemSource::refresh` once, then walks the `Registry` calling `Collector::sample(&mut CollectCtx)` on each, then `State::commit(snapshot)`.
 2. **UI thread** (main, `App::event_loop`) — every `config.ui_tick_ms` (default 100ms): non-blocking `crossterm::event::poll`, `terminal.draw(|f| ui::render(f, &state, &mut ui_state, &theme))`. Reads via `state.with_view(|view| ...)`.
 3. **GPU reader thread** (`gpu-reader`, only when `--gpu` on macOS) — owned by `GpuCollector`, parses powermetrics stdout into a `Mutex<GpuStats>`. Killed via `setpgid`-rooted SIGKILL on Drop.
-4. **Container poller thread** (`container-poller`) — owned by `ContainerCollector`, runs `docker stats --no-stream --format json` every 2 s into a `Mutex<PollerState>`. Sampler reads cached results so the ~150 ms docker call doesn't bottleneck the 1 Hz tick. Drop signals shutdown + joins.
+4. **Container poller thread** (`container-poller`) — owned by `ContainerCollector`, drives a current-thread tokio runtime that calls `bollard` (`list_containers` + per-container `stats(stream=false)`) every 2 s into a `Mutex<PollerState>`. Sampler reads cached results so the docker round-trips don't bottleneck the 1 Hz tick. Drop signals shutdown + joins.
 5. **Exporter thread** (planned, Phase 6) — tokio + axum serving `/metrics`, reading the same `SharedState`.
 
 All threads share one `Arc<State>` (alias `SharedState`); state is guarded by an internal `RwLock`. Sampler is the sole writer; UI and (future) exporter are readers.
