@@ -109,6 +109,7 @@ fn category_display(cat: &str) -> &str {
     match cat {
         "temp" => "Temperature",
         "fan" => "Fan",
+        "power" => "Power",
         other => other,
     }
 }
@@ -117,6 +118,7 @@ fn format_value(r: &SensorReading) -> String {
     match r.unit {
         "°C" => format!("{:.1}{}", r.value, r.unit),
         "rpm" => format!("{:>5} {}", r.value as i64, r.unit),
+        "W" => format!("{:>5.2} {}", r.value, r.unit),
         _ => format!("{:.2} {}", r.value, r.unit),
     }
 }
@@ -126,6 +128,11 @@ fn colour_for(theme: &Theme, category: &str, value: f64) -> Color {
         "temp" => match value {
             v if v >= 90.0 => theme.gauge_high,
             v if v >= 75.0 => theme.gauge_mid,
+            _ => theme.gauge_low,
+        },
+        "power" => match value {
+            v if v >= 20.0 => theme.gauge_high,
+            v if v >= 8.0 => theme.gauge_mid,
             _ => theme.gauge_low,
         },
         _ => Color::White,

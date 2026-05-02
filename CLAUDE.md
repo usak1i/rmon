@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `resource-monitor` is a Rust TUI system monitor (htop-style) for **macOS + Linux**. It is being built in deliberate phases — see `/Users/han/.claude/plans/rust-htop-cpu-memory-disk-frolicking-meadow.md` for the full design plan and `TODO.md` in this repo for the active roadmap.
 
-**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout) · Phase 2.5/3 carryovers (battery status + time-remaining, Linux connection counts, GPU stale-data check, `setpgid` process-group containment for powermetrics) · Phase 4 (Container panel via `docker stats` subprocess in a dedicated poller thread, eight-panel layout) · Phase 4.5 (Linux cgroup PID grouping, Process panel `g` toggle for grouped/flat view) · Phase 5 (TOML alert rules with breach-since tracking; firing tints panel borders, `a` opens an overlay, transitions log + ring the bell).
+**Done**: Phase 0 (scaffolding) · Phase 1 (CPU/Mem/Disk/Process collectors, four-panel TUI with sparklines, dark theme, focus/sort/search/kill/help keys) · Phase 2 (Network + Sensors, six-panel layout) · Phase 3 (macOS Apple Silicon GPU via `sudo powermetrics`, opt-in via `--gpu`, conditional 7-panel layout) · Phase 2.5/3 carryovers (battery status + time-remaining, Linux connection counts, GPU stale-data check, `setpgid` process-group containment for powermetrics) · Phase 4 (Container panel, eight-panel layout) · Phase 4.5 (Linux cgroup PID grouping, Process panel `g` toggle for grouped/flat view) · Phase 5 (TOML alert rules with breach-since tracking; firing tints panel borders, `a` opens an overlay, transitions log + ring the bell) · bollard upgrade (Docker API client driven by a current-thread tokio runtime; replaces `docker stats` subprocess) · IOReport (Apple Silicon CPU/GPU/ANE power via the private framework — no sudo).
 
-**Next** (live in `TODO.md`): bollard upgrade (Docker API client, pulls in tokio), macOS thermal/fan via IOReport, or Phase 6 (Prometheus exporter).
+**Next** (live in `TODO.md`): sudo-less GPU mode (`--gpu=ioreport`), IOReport thermal sensors, or Phase 6 (Prometheus exporter).
 
 Differentiators planned beyond htop: historical sparkline charts, modern theme, container/cgroup awareness, alert rules, and a Prometheus `/metrics` exporter. Explicit non-goals: Windows, GUI/Web UI, multi-machine view, record/replay.
 
@@ -131,7 +131,7 @@ for docs-only changes (`*.md`, `TODO.md`, `CLAUDE.md`).
 
 - **Cross-platform baseline**: `sysinfo` covers CPU/Mem/Disk/Process/Network. `SystemSource` owns the `System`, `Disks`, `Networks`, `Users` handles and refreshes them once per tick.
 - **Linux-specific** (`collector/platform/linux.rs` + `collector/connections.rs`): hwmon walk for temp/fan, `/sys/class/power_supply/BAT*` for battery status + time-remaining, `/proc/net/{tcp,tcp6,udp,udp6}` for connection state counts.
-- **macOS-specific** (`collector/platform/macos.rs` + `collector/gpu.rs`): `pmset -g batt` parser for battery, `sudo powermetrics --samplers gpu_power` subprocess for GPU. Apple Silicon thermal/fan via IOReport private framework is on the roadmap (would also unlock a no-sudo GPU path).
+- **macOS-specific** (`collector/platform/{macos,ioreport}.rs` + `collector/gpu.rs`): `pmset -g batt` parser for battery, `sudo powermetrics --samplers gpu_power` subprocess for GPU usage, and IOReport (private framework) for CPU/GPU/ANE *power* readings (no sudo). IOReport is linked as `/usr/lib/libIOReport.dylib` via a `build.rs` that adds `/usr/lib` to the rustc-link-search path — on macOS 26 (Tahoe) the framework form is gone from the CLT SDK. The reverse-engineered FFI signatures (especially `IOReportCreateSubscription`'s arg order) are easy to get wrong → SIGTRAP at first call; `collector/platform/ioreport.rs` documents the working layout.
 
 ### Phase 3 GPU specifics
 

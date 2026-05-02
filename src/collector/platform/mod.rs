@@ -12,7 +12,11 @@ mod linux;
 pub use linux::{read_batteries, read_sensors};
 
 #[cfg(target_os = "macos")]
+mod ioreport;
+#[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub use ioreport::IoReportSampler;
 #[cfg(target_os = "macos")]
 pub use macos::{read_batteries, read_sensors};
 

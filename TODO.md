@@ -15,6 +15,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - `[x]` Phase 4.5 — Linux cgroup PID grouping (`/proc/<pid>/cgroup` parser handling cgroup v1, v2 systemd-style docker / cri-containerd), Process panel `g` toggle that renders container header rows + indented children + a final `system` bucket for unattributed PIDs
 - `[x]` Phase 5 — TOML alert rules (`[[alert]]` blocks with `op` ∈ `> < >= <=`, `duration`, `severity`); evaluator with breach-since tracking, firing transitions tint panel borders + ring the terminal bell + log via tracing, `a` key opens an overlay listing currently-firing + last 50 transitions
 - `[x]` Bollard upgrade — replaced the docker CLI subprocess with bollard 0.20 driven by a current-thread tokio runtime on the `container-poller` thread. Pulls in tokio (`net`/`rt`/`time` only) so Phase 6 Prometheus exporter can reuse it. Pure CPU% formula extracted as testable fn.
+- `[x]` IOReport (B.2 partial) — Apple Silicon CPU / GPU / ANE *power* readings (Watts, no sudo) via the private IOReport framework. `build.rs` adds `/usr/lib` to the linker search path so `libIOReport.dylib` resolves on macOS 26. SensorsCollector holds an optional sampler; `power` category surfaces in the Sensors widget. Thermal sensors and the no-sudo GPU usage path stay as carryovers.
 
 ---
 
@@ -26,10 +27,11 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Linux connection counts** — TCP states (ESTABLISHED / LISTEN /
   TIME_WAIT) and UDP totals from `/proc/net/{tcp,tcp6,udp,udp6}`. Surfaced
   as a footer line in the Network widget when present.
-- [ ] **macOS thermal/fan via IOReport** — Apple Silicon has no public SMC
-  equivalent for die temperatures. Bind to the private `IOReport` framework
-  via a small FFI shim. Emit `sensor.temp.cpu_die`, `sensor.fan.<idx>` etc.
-  alongside the Linux hwmon path.
+- [ ] **macOS thermal sensors** — IOReport infrastructure is in place
+  (`collector/platform/ioreport.rs`), but the channel groups carrying
+  CPU die / GPU die temperatures and fan RPMs are gated by chip
+  generation (PMP / SMC) and aren't exposed uniformly across Apple
+  Silicon. Needs per-chip channel discovery + a fallback story.
 - [ ] **AC online indicator** — battery `status` already implies the
   charging state, but a dedicated AC sensor (charging cable plugged but
   battery full) would be honest. Linux `/sys/class/power_supply/AC*/online`,
@@ -49,7 +51,13 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 Path A (sudo + powermetrics) is shipped. Remaining items:
 
-- [ ] **Path B (IOReport, no sudo)**: bind to the private `IOReport` framework. No sudo, but version-fragile across macOS releases. Gate behind `--gpu=ioreport`.
+- [ ] **Path B (IOReport, no sudo)**: extend the existing IOReport
+  sampler with a second subscription on the `GPU Stats` group to read
+  active vs idle residency. Promote `--gpu` to a value-enum
+  (`off|powermetrics|ioreport`) and default to `ioreport` on macOS so
+  the sudo prompt is opt-in. The IOReport FFI itself is now in place
+  (`collector/platform/ioreport.rs`) — this is mostly channel-name
+  matching + state-residency math.
 - [ ] **Additional samplers**: `--samplers ane_power`, `media_power`, `cpu_power` would let us emit `gpu.ane_*`, `gpu.media_*`, package power. Trade-off is more parser surface area.
 - [x] **Stale-data check**: GpuStats tracks `last_update`; sample() skips emitting numerics if older than 5 s, so the widget falls back to its empty state instead of a frozen reading.
 - [x] **Process-group containment**: `Command::pre_exec` sets `setpgid(0, 0)` so sudo + powermetrics share a pgid; `Drop` kills the whole group so powermetrics doesn't outlive a clean shutdown. Note: this only helps when our process exits cleanly — a SIGKILL of our parent still leaks the child (no portable way to fix on macOS).

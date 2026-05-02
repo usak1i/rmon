@@ -6,11 +6,21 @@ use super::{CollectCtx, Collector};
 /// Reads platform sensors (temperature, fan, battery) and writes both the
 /// structured `Snapshot::sensors` list and per-reading numeric series under
 /// `sensor.<category>.<name>` so they can drive sparklines.
-pub struct SensorsCollector;
+///
+/// On macOS, also owns an optional `IoReportSampler` for power readings
+/// derived from the private IOReport framework. Stays `None` if the
+/// subscription couldn't be created (e.g. macOS version mismatch).
+pub struct SensorsCollector {
+    #[cfg(target_os = "macos")]
+    ioreport: Option<platform::IoReportSampler>,
+}
 
 impl SensorsCollector {
     pub fn new() -> Self {
-        Self
+        Self {
+            #[cfg(target_os = "macos")]
+            ioreport: platform::IoReportSampler::new(),
+        }
     }
 }
 
@@ -26,7 +36,13 @@ impl Collector for SensorsCollector {
     }
 
     fn sample(&mut self, ctx: &mut CollectCtx<'_>) -> Result<()> {
-        let readings = platform::read_sensors();
+        let mut readings = platform::read_sensors();
+
+        #[cfg(target_os = "macos")]
+        if let Some(sampler) = self.ioreport.as_mut() {
+            readings.extend(sampler.sample());
+        }
+
         for r in &readings {
             ctx.snapshot
                 .set(format!("sensor.{}.{}", r.category, r.name), r.value);
